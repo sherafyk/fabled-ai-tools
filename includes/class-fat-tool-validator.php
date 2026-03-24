@@ -5,6 +5,60 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 class FAT_Tool_Validator {
+    public function normalize_wp_integration( $config ) {
+        $config = is_array( $config ) ? $config : array();
+
+        $source = FAT_Helpers::array_get( $config, 'source', array() );
+        $apply  = FAT_Helpers::array_get( $config, 'apply', array() );
+
+        $source_type = sanitize_key( FAT_Helpers::array_get( $source, 'type', '' ) );
+        if ( ! in_array( $source_type, array( '', 'post', 'attachment' ), true ) ) {
+            $source_type = '';
+        }
+
+        $apply_target = sanitize_key( FAT_Helpers::array_get( $apply, 'target', '' ) );
+        if ( ! in_array( $apply_target, array( '', 'post', 'attachment' ), true ) ) {
+            $apply_target = '';
+        }
+
+        $mappings = array();
+        foreach ( (array) FAT_Helpers::array_get( $apply, 'mappings', array() ) as $row ) {
+            if ( ! is_array( $row ) ) {
+                continue;
+            }
+
+            $output_key = FAT_Helpers::sanitize_keyish( FAT_Helpers::array_get( $row, 'output_key', '' ) );
+            $wp_field   = sanitize_key( FAT_Helpers::array_get( $row, 'wp_field', '' ) );
+            if ( '' === $output_key || '' === $wp_field ) {
+                continue;
+            }
+
+            $mappings[] = array(
+                'output_key' => $output_key,
+                'wp_field'   => $wp_field,
+                'label'      => sanitize_text_field( FAT_Helpers::array_get( $row, 'label', $output_key ) ),
+            );
+        }
+
+        if ( '' === $source_type && '' === $apply_target && empty( $mappings ) ) {
+            return array();
+        }
+
+        return array(
+            'source' => array(
+                'type'           => $source_type,
+                'allow_manual'   => FAT_Helpers::to_bool_flag( FAT_Helpers::array_get( $source, 'allow_manual', 1 ) ),
+                'allow_draft'    => FAT_Helpers::to_bool_flag( FAT_Helpers::array_get( $source, 'allow_draft', 1 ) ),
+                'allow_publish'  => FAT_Helpers::to_bool_flag( FAT_Helpers::array_get( $source, 'allow_publish', 1 ) ),
+                'allow_attachment' => FAT_Helpers::to_bool_flag( FAT_Helpers::array_get( $source, 'allow_attachment', 'attachment' === $source_type ? 1 : 0 ) ),
+            ),
+            'apply'  => array(
+                'target'   => $apply_target,
+                'mappings' => $mappings,
+            ),
+        );
+    }
+
     public function normalize_input_schema( $rows ) {
         $rows   = is_array( $rows ) ? $rows : array();
         $output = array();
@@ -95,6 +149,7 @@ class FAT_Tool_Validator {
 
         $input_schema  = (array) FAT_Helpers::array_get( $data, 'input_schema', array() );
         $output_schema = (array) FAT_Helpers::array_get( $data, 'output_schema', array() );
+        $wp_integration = (array) FAT_Helpers::array_get( $data, 'wp_integration', array() );
 
         if ( empty( $input_schema ) ) {
             $errors[] = __( 'At least one input field is required.', 'fabled-ai-tools' );
@@ -153,9 +208,75 @@ class FAT_Tool_Validator {
             $errors[] = __( 'Max output tokens must be at least 1.', 'fabled-ai-tools' );
         }
 
+        $wp_integration_result = $this->validate_wp_integration( $wp_integration, $output_keys );
+        $errors                = array_merge( $errors, FAT_Helpers::array_get( $wp_integration_result, 'errors', array() ) );
+
         return array(
             'errors'   => array_values( array_unique( $errors ) ),
             'warnings' => array_values( array_unique( $warnings ) ),
+        );
+    }
+
+    protected function validate_wp_integration( $config, $output_keys ) {
+        $errors         = array();
+        $allowed_fields = array( 'post_title', 'post_excerpt', 'post_content', 'alt_text' );
+
+        if ( empty( $config ) ) {
+            return array( 'errors' => array() );
+        }
+
+        $source = (array) FAT_Helpers::array_get( $config, 'source', array() );
+        $apply  = (array) FAT_Helpers::array_get( $config, 'apply', array() );
+
+        $source_type = sanitize_key( FAT_Helpers::array_get( $source, 'type', '' ) );
+        if ( ! in_array( $source_type, array( '', 'post', 'attachment' ), true ) ) {
+            $errors[] = __( 'WordPress integration source type must be post, attachment, or empty.', 'fabled-ai-tools' );
+        }
+
+        $target = sanitize_key( FAT_Helpers::array_get( $apply, 'target', '' ) );
+        if ( ! in_array( $target, array( '', 'post', 'attachment' ), true ) ) {
+            $errors[] = __( 'WordPress integration apply target must be post, attachment, or empty.', 'fabled-ai-tools' );
+        }
+
+        $seen_mappings = array();
+        foreach ( (array) FAT_Helpers::array_get( $apply, 'mappings', array() ) as $mapping ) {
+            $output_key = FAT_Helpers::sanitize_keyish( FAT_Helpers::array_get( $mapping, 'output_key', '' ) );
+            $wp_field   = sanitize_key( FAT_Helpers::array_get( $mapping, 'wp_field', '' ) );
+
+            if ( '' === $output_key || '' === $wp_field ) {
+                $errors[] = __( 'Each apply mapping needs output_key and wp_field.', 'fabled-ai-tools' );
+                continue;
+            }
+
+            if ( ! in_array( $output_key, $output_keys, true ) ) {
+                /* translators: %s: output key */
+                $errors[] = sprintf( __( 'Apply mapping output key does not exist in output schema: %s', 'fabled-ai-tools' ), $output_key );
+            }
+
+            if ( ! in_array( $wp_field, $allowed_fields, true ) ) {
+                /* translators: %s: field name */
+                $errors[] = sprintf( __( 'Unsupported WordPress field in apply mapping: %s', 'fabled-ai-tools' ), $wp_field );
+                continue;
+            }
+
+            $mapping_key = $output_key . '|' . $wp_field;
+            if ( in_array( $mapping_key, $seen_mappings, true ) ) {
+                /* translators: %s: mapping pair */
+                $errors[] = sprintf( __( 'Duplicate apply mapping: %s', 'fabled-ai-tools' ), $mapping_key );
+            }
+            $seen_mappings[] = $mapping_key;
+
+            if ( 'attachment' !== $target && 'alt_text' === $wp_field ) {
+                $errors[] = __( 'alt_text mappings require apply target attachment.', 'fabled-ai-tools' );
+            }
+        }
+
+        if ( ! empty( $apply['mappings'] ) && '' === $target ) {
+            $errors[] = __( 'Apply target is required when mappings are configured.', 'fabled-ai-tools' );
+        }
+
+        return array(
+            'errors' => array_values( array_unique( $errors ) ),
         );
     }
 

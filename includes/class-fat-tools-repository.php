@@ -168,6 +168,7 @@ class FAT_Tools_Repository {
             'user_prompt_template' => FAT_Helpers::sanitize_textarea_preserve_newlines( FAT_Helpers::array_get( $data, 'user_prompt_template', '' ) ),
             'input_schema'         => wp_json_encode( (array) FAT_Helpers::array_get( $data, 'input_schema', array() ) ),
             'output_schema'        => wp_json_encode( (array) FAT_Helpers::array_get( $data, 'output_schema', array() ) ),
+            'wp_integration'       => wp_json_encode( (array) FAT_Helpers::array_get( $data, 'wp_integration', array() ) ),
             'max_input_chars'      => max( 1, absint( FAT_Helpers::array_get( $data, 'max_input_chars', 20000 ) ) ),
             'max_output_tokens'    => max( 1, absint( FAT_Helpers::array_get( $data, 'max_output_tokens', 700 ) ) ),
             'daily_run_limit'      => max( 0, absint( FAT_Helpers::array_get( $data, 'daily_run_limit', 0 ) ) ),
@@ -197,6 +198,7 @@ class FAT_Tools_Repository {
             '%s', // user_prompt_template.
             '%s', // input_schema.
             '%s', // output_schema.
+            '%s', // wp_integration.
             '%d', // max_input_chars.
             '%d', // max_output_tokens.
             '%d', // daily_run_limit.
@@ -224,6 +226,7 @@ class FAT_Tools_Repository {
         $row['allowed_capabilities'] = FAT_Helpers::maybe_json_decode( FAT_Helpers::array_get( $row, 'allowed_capabilities', array() ), array() );
         $row['input_schema']         = FAT_Helpers::maybe_json_decode( FAT_Helpers::array_get( $row, 'input_schema', array() ), array() );
         $row['output_schema']        = FAT_Helpers::maybe_json_decode( FAT_Helpers::array_get( $row, 'output_schema', array() ), array() );
+        $row['wp_integration']       = FAT_Helpers::maybe_json_decode( FAT_Helpers::array_get( $row, 'wp_integration', array() ), array() );
         $row['max_input_chars']      = isset( $row['max_input_chars'] ) ? (int) $row['max_input_chars'] : 0;
         $row['max_output_tokens']    = isset( $row['max_output_tokens'] ) ? (int) $row['max_output_tokens'] : 0;
         $row['daily_run_limit']      = isset( $row['daily_run_limit'] ) ? (int) $row['daily_run_limit'] : 0;
