@@ -96,7 +96,12 @@ class FAT_Tool_Runner {
             return new WP_Error( 'fat_tool_forbidden', __( 'You are not allowed to run this tool.', 'fabled-ai-tools' ), array( 'status' => 403 ) );
         }
 
-        $validated = $this->prompt_engine->sanitize_runtime_inputs( $tool, $raw_inputs );
+        $resolved_inputs = $this->resolve_inputs_from_selected_post( $tool, $raw_inputs );
+        if ( is_wp_error( $resolved_inputs ) ) {
+            return $resolved_inputs;
+        }
+
+        $validated = $this->prompt_engine->sanitize_runtime_inputs( $tool, $resolved_inputs );
         if ( ! empty( $validated['errors'] ) ) {
             return new WP_Error( 'fat_invalid_inputs', implode( ' ', $validated['errors'] ), array( 'status' => 400, 'errors' => $validated['errors'] ) );
         }
@@ -256,5 +261,68 @@ class FAT_Tool_Runner {
         }
 
         return wp_get_current_user();
+    }
+
+    protected function resolve_inputs_from_selected_post( $tool, $raw_inputs ) {
+        $inputs = is_array( $raw_inputs ) ? $raw_inputs : array();
+
+        if ( ! $this->tool_has_input_key( $tool, 'article_body' ) ) {
+            return $inputs;
+        }
+
+        $source = sanitize_key( FAT_Helpers::array_get( $inputs, '__fat_article_source', 'paste' ) );
+        if ( ! in_array( $source, array( 'draft', 'publish' ), true ) ) {
+            return $inputs;
+        }
+
+        $post_id = absint( FAT_Helpers::array_get( $inputs, '__fat_article_post_id', 0 ) );
+        if ( $post_id <= 0 ) {
+            return new WP_Error( 'fat_invalid_inputs', __( 'Please select a post for the chosen content source.', 'fabled-ai-tools' ), array( 'status' => 400 ) );
+        }
+
+        $post = get_post( $post_id );
+        if ( ! $post || 'post' !== $post->post_type ) {
+            return new WP_Error( 'fat_invalid_inputs', __( 'Selected post could not be found.', 'fabled-ai-tools' ), array( 'status' => 400 ) );
+        }
+
+        $status = get_post_status( $post );
+        if ( ! in_array( $status, array( 'draft', 'publish' ), true ) || $status !== $source ) {
+            return new WP_Error( 'fat_invalid_inputs', __( 'Selected post is not valid for the chosen content source.', 'fabled-ai-tools' ), array( 'status' => 400 ) );
+        }
+
+        $inputs['article_body'] = $this->normalize_post_content_for_article_body( $post->post_content );
+
+        if ( '' === trim( (string) FAT_Helpers::array_get( $inputs, 'title', '' ) ) ) {
+            $inputs['title'] = html_entity_decode( get_the_title( $post ), ENT_QUOTES, get_bloginfo( 'charset' ) );
+        }
+
+        if ( 'publish' === $status && '' === trim( (string) FAT_Helpers::array_get( $inputs, 'url', '' ) ) ) {
+            $permalink = get_permalink( $post );
+            if ( $permalink ) {
+                $inputs['url'] = $permalink;
+            }
+        }
+
+        return $inputs;
+    }
+
+    protected function normalize_post_content_for_article_body( $content ) {
+        $content = (string) $content;
+        $content = strip_shortcodes( $content );
+        $content = wp_strip_all_tags( $content );
+        $content = preg_replace( '/\s+/u', ' ', $content );
+
+        return trim( (string) $content );
+    }
+
+    protected function tool_has_input_key( $tool, $key ) {
+        $key = sanitize_key( $key );
+        foreach ( (array) FAT_Helpers::array_get( $tool, 'input_schema', array() ) as $field ) {
+            if ( $key === sanitize_key( FAT_Helpers::array_get( $field, 'key', '' ) ) ) {
+                return true;
+            }
+        }
+
+        return false;
     }
 }

@@ -83,6 +83,13 @@
 
         const tools = Array.isArray(data.tools) ? data.tools : [];
         const byId = {};
+        const postCache = {};
+        const contentSourceState = {
+            source: 'paste',
+            selectedPostId: '',
+            controls: null,
+            articleInput: null
+        };
         tools.forEach(function (tool) {
             byId[String(tool.id)] = tool;
         });
@@ -152,6 +159,163 @@
             return wrapper;
         }
 
+        function getToolInputField(tool, key) {
+            return (tool.input_schema || []).find(function (field) {
+                return field.key === key;
+            }) || null;
+        }
+
+        async function loadPostsForStatus(status) {
+            if (postCache[status]) {
+                return postCache[status];
+            }
+
+            const endpoint = new URL(data.ajaxUrl || '', window.location.origin);
+            endpoint.searchParams.set('action', 'fat_runner_posts');
+            endpoint.searchParams.set('nonce', data.postsNonce || '');
+            endpoint.searchParams.set('status', status);
+
+            const response = await fetch(endpoint.toString(), {
+                method: 'GET',
+                credentials: 'same-origin'
+            });
+            const payload = await response.json();
+
+            if (!response.ok || !payload.success) {
+                const defaultMessage = data.strings.loadPostsError || 'Unable to load posts for this source.';
+                throw new Error((payload && payload.data && payload.data.message) ? payload.data.message : defaultMessage);
+            }
+
+            const posts = Array.isArray(payload.data.posts) ? payload.data.posts : [];
+            postCache[status] = posts;
+            return posts;
+        }
+
+        function setArticleInputState(disabled) {
+            if (!contentSourceState.articleInput) {
+                return;
+            }
+            contentSourceState.articleInput.disabled = !!disabled;
+        }
+
+        function buildPostOptions(selectEl, posts) {
+            const placeholder = document.createElement('option');
+            placeholder.value = '';
+            placeholder.textContent = data.strings.choosePost || 'Choose a post';
+            selectEl.appendChild(placeholder);
+
+            posts.forEach(function (post) {
+                const option = document.createElement('option');
+                option.value = String(post.id || '');
+                option.textContent = post.title || ('#' + post.id);
+                selectEl.appendChild(option);
+            });
+        }
+
+        function renderArticleSourceControls(tool) {
+            const articleField = getToolInputField(tool, 'article_body');
+            if (!articleField) {
+                contentSourceState.controls = null;
+                contentSourceState.articleInput = null;
+                contentSourceState.source = 'paste';
+                contentSourceState.selectedPostId = '';
+                return;
+            }
+
+            const articleInput = document.getElementById('fat-input-article_body');
+            if (!articleInput) {
+                return;
+            }
+
+            contentSourceState.articleInput = articleInput;
+            contentSourceState.source = 'paste';
+            contentSourceState.selectedPostId = '';
+
+            const controlsWrap = document.createElement('div');
+            controlsWrap.className = 'fat-field fat-content-source-field';
+
+            const sourceLabel = document.createElement('label');
+            sourceLabel.setAttribute('for', 'fat-content-source');
+            sourceLabel.textContent = data.strings.contentSource || 'Content Source';
+            controlsWrap.appendChild(sourceLabel);
+
+            const sourceSelect = document.createElement('select');
+            sourceSelect.id = 'fat-content-source';
+            sourceSelect.className = 'fat-content-source-select';
+            [
+                { value: 'paste', label: data.strings.pasteContent || 'Paste Content' },
+                { value: 'draft', label: data.strings.selectDraft || 'Select Draft' },
+                { value: 'publish', label: data.strings.selectPublished || 'Select Published Post' }
+            ].forEach(function (item) {
+                const option = document.createElement('option');
+                option.value = item.value;
+                option.textContent = item.label;
+                sourceSelect.appendChild(option);
+            });
+            controlsWrap.appendChild(sourceSelect);
+
+            const postSelectWrap = document.createElement('div');
+            postSelectWrap.className = 'fat-content-post-wrap';
+            postSelectWrap.hidden = true;
+
+            const postSelect = document.createElement('select');
+            postSelect.id = 'fat-content-post-select';
+            postSelect.className = 'fat-content-post-select';
+            postSelectWrap.appendChild(postSelect);
+
+            const postStatus = document.createElement('p');
+            postStatus.className = 'description fat-content-post-status';
+            postSelectWrap.appendChild(postStatus);
+
+            controlsWrap.appendChild(postSelectWrap);
+
+            const bodyStatus = document.createElement('p');
+            bodyStatus.className = 'description fat-content-body-status';
+            controlsWrap.appendChild(bodyStatus);
+
+            fieldsWrap.insertBefore(controlsWrap, articleInput.closest('.fat-field'));
+
+            async function updateSourceUi(source) {
+                contentSourceState.source = source;
+                contentSourceState.selectedPostId = '';
+                postSelect.innerHTML = '';
+                postStatus.textContent = '';
+
+                if (source === 'paste') {
+                    postSelectWrap.hidden = true;
+                    setArticleInputState(false);
+                    bodyStatus.textContent = '';
+                    return;
+                }
+
+                postSelectWrap.hidden = false;
+                setArticleInputState(true);
+                bodyStatus.textContent = data.strings.bodyFilledFromPost || 'Article body will be pulled from the selected post.';
+                postStatus.textContent = data.strings.loadingPosts || 'Loading posts…';
+
+                try {
+                    const posts = await loadPostsForStatus(source);
+                    postSelect.innerHTML = '';
+                    buildPostOptions(postSelect, posts);
+                    postStatus.textContent = posts.length ? '' : (data.strings.noPostsFound || 'No posts found for this status.');
+                } catch (error) {
+                    postSelect.innerHTML = '';
+                    buildPostOptions(postSelect, []);
+                    postStatus.textContent = error.message || (data.strings.loadPostsError || 'Unable to load posts for this source.');
+                }
+            }
+
+            sourceSelect.addEventListener('change', function () {
+                updateSourceUi(sourceSelect.value);
+            });
+            postSelect.addEventListener('change', function () {
+                contentSourceState.selectedPostId = postSelect.value || '';
+            });
+
+            contentSourceState.controls = controlsWrap;
+            updateSourceUi('paste');
+        }
+
         function renderInputs(tool) {
             fieldsWrap.innerHTML = '';
             outputsWrap.innerHTML = '';
@@ -161,6 +325,7 @@
             (tool.input_schema || []).forEach(function (field) {
                 fieldsWrap.appendChild(renderField(field));
             });
+            renderArticleSourceControls(tool);
         }
 
         function copyText(value, button) {
@@ -235,6 +400,16 @@
             (tool.input_schema || []).forEach(function (field) {
                 inputs[field.key] = formData.get(field.key) || '';
             });
+
+            if (contentSourceState.controls) {
+                inputs.__fat_article_source = contentSourceState.source;
+                inputs.__fat_article_post_id = contentSourceState.selectedPostId || '';
+
+                if ((contentSourceState.source === 'draft' || contentSourceState.source === 'publish') && !contentSourceState.selectedPostId) {
+                    setStatus(data.strings.postSelectionRequired || 'Please select a post for the chosen content source.', 'error');
+                    return;
+                }
+            }
 
             submit.disabled = true;
             setStatus(data.strings.running || 'Running…', 'loading');

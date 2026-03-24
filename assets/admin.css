@@ -88,6 +88,20 @@
     margin-bottom: 6px;
 }
 
+.fat-content-source-select,
+.fat-content-post-select {
+    width: 100%;
+    max-width: 420px;
+}
+
+.fat-content-post-wrap {
+    margin-top: 8px;
+}
+
+.fat-content-body-status {
+    margin-top: 6px;
+}
+
 .fat-field input,
 .fat-field textarea,
 .fat-output-card textarea {

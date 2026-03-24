@@ -27,6 +27,7 @@ class FAT_Admin {
         add_action( 'admin_notices', array( $this, 'render_admin_notices' ) );
         add_action( 'admin_post_fat_save_tool', array( $this, 'handle_save_tool' ) );
         add_action( 'admin_post_fat_tool_action', array( $this, 'handle_tool_action' ) );
+        add_action( 'wp_ajax_fat_runner_posts', array( $this, 'handle_runner_posts_lookup' ) );
     }
 
     public function register_menus() {
@@ -108,7 +109,9 @@ class FAT_Admin {
             array(
                 'page'    => $this->current_page(),
                 'restUrl' => esc_url_raw( rest_url( 'fabled-ai-tools/v1/run' ) ),
+                'ajaxUrl' => esc_url_raw( admin_url( 'admin-ajax.php' ) ),
                 'nonce'   => wp_create_nonce( 'wp_rest' ),
+                'postsNonce' => wp_create_nonce( 'fat_runner_posts' ),
                 'tools'   => $public_tools,
                 'strings' => array(
                     'runTool'        => __( 'Run Tool', 'fabled-ai-tools' ),
@@ -120,6 +123,16 @@ class FAT_Admin {
                     'noTools'        => __( 'No tools are available for your account.', 'fabled-ai-tools' ),
                     'required'       => __( 'Required', 'fabled-ai-tools' ),
                     'optional'       => __( 'Optional', 'fabled-ai-tools' ),
+                    'contentSource'  => __( 'Content Source', 'fabled-ai-tools' ),
+                    'pasteContent'   => __( 'Paste Content', 'fabled-ai-tools' ),
+                    'selectDraft'    => __( 'Select Draft', 'fabled-ai-tools' ),
+                    'selectPublished'=> __( 'Select Published Post', 'fabled-ai-tools' ),
+                    'loadingPosts'   => __( 'Loading posts…', 'fabled-ai-tools' ),
+                    'choosePost'     => __( 'Choose a post', 'fabled-ai-tools' ),
+                    'noPostsFound'   => __( 'No posts found for this status.', 'fabled-ai-tools' ),
+                    'loadPostsError' => __( 'Unable to load posts for this source.', 'fabled-ai-tools' ),
+                    'postSelectionRequired' => __( 'Please select a post for the chosen content source.', 'fabled-ai-tools' ),
+                    'bodyFilledFromPost' => __( 'Article body will be pulled from the selected post.', 'fabled-ai-tools' ),
                     'addInputField'  => __( 'Add Input Field', 'fabled-ai-tools' ),
                     'addOutputField' => __( 'Add Output Field', 'fabled-ai-tools' ),
                 ),
@@ -755,6 +768,58 @@ class FAT_Admin {
             </div>
         </div>
         <?php
+    }
+
+    public function handle_runner_posts_lookup() {
+        if ( ! $this->current_user_can_run_tools() ) {
+            wp_send_json_error(
+                array(
+                    'message' => __( 'You are not allowed to load posts.', 'fabled-ai-tools' ),
+                ),
+                403
+            );
+        }
+
+        check_ajax_referer( 'fat_runner_posts', 'nonce' );
+
+        $status = isset( $_GET['status'] ) ? sanitize_key( wp_unslash( $_GET['status'] ) ) : '';
+        if ( ! in_array( $status, array( 'draft', 'publish' ), true ) ) {
+            wp_send_json_error(
+                array(
+                    'message' => __( 'Invalid post status requested.', 'fabled-ai-tools' ),
+                ),
+                400
+            );
+        }
+
+        $query = new WP_Query(
+            array(
+                'post_type'              => 'post',
+                'post_status'            => $status,
+                'posts_per_page'         => 40,
+                'orderby'                => 'modified',
+                'order'                  => 'DESC',
+                'ignore_sticky_posts'    => true,
+                'no_found_rows'          => true,
+                'update_post_meta_cache' => false,
+                'update_post_term_cache' => false,
+                'fields'                 => 'ids',
+            )
+        );
+
+        $posts = array();
+        foreach ( $query->posts as $post_id ) {
+            $posts[] = array(
+                'id'    => (int) $post_id,
+                'title' => html_entity_decode( get_the_title( $post_id ), ENT_QUOTES, get_bloginfo( 'charset' ) ),
+            );
+        }
+
+        wp_send_json_success(
+            array(
+                'posts' => $posts,
+            )
+        );
     }
 
     protected function build_tool_data_from_request() {
