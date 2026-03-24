@@ -9,6 +9,7 @@ class FAT_Activator {
         self::create_tables();
         self::add_capabilities();
         self::seed_example_tools();
+        self::maybe_backfill_seeded_wp_integration();
         update_option( 'fat_db_version', FAT_DB_VERSION );
     }
 
@@ -21,6 +22,7 @@ class FAT_Activator {
         if ( FAT_DB_VERSION !== $installed ) {
             self::create_tables();
             self::add_capabilities();
+            self::maybe_backfill_seeded_wp_integration();
             update_option( 'fat_db_version', FAT_DB_VERSION );
         }
     }
@@ -200,6 +202,25 @@ class FAT_Activator {
                         'copyable' => 1,
                     ),
                 ),
+                'wp_integration'       => array(
+                    'source' => array(
+                        'type'             => 'post',
+                        'allow_manual'     => 1,
+                        'allow_draft'      => 1,
+                        'allow_publish'    => 1,
+                        'allow_attachment' => 0,
+                    ),
+                    'apply'  => array(
+                        'target'   => 'post',
+                        'mappings' => array(
+                            array(
+                                'output_key' => 'excerpt',
+                                'wp_field'   => 'post_excerpt',
+                                'label'      => 'Post Excerpt',
+                            ),
+                        ),
+                    ),
+                ),
                 'max_input_chars'      => 30000,
                 'max_output_tokens'    => 250,
                 'daily_run_limit'      => 25,
@@ -272,6 +293,25 @@ class FAT_Activator {
                         'copyable' => 1,
                     ),
                 ),
+                'wp_integration'       => array(
+                    'source' => array(
+                        'type'             => 'post',
+                        'allow_manual'     => 1,
+                        'allow_draft'      => 1,
+                        'allow_publish'    => 1,
+                        'allow_attachment' => 0,
+                    ),
+                    'apply'  => array(
+                        'target'   => 'post',
+                        'mappings' => array(
+                            array(
+                                'output_key' => 'excerpt',
+                                'wp_field'   => 'post_excerpt',
+                                'label'      => 'Post Excerpt',
+                            ),
+                        ),
+                    ),
+                ),
                 'max_input_chars'      => 36000,
                 'max_output_tokens'    => 600,
                 'daily_run_limit'      => 20,
@@ -280,5 +320,69 @@ class FAT_Activator {
                 'sort_order'           => 30,
             )
         );
+    }
+
+    protected static function maybe_backfill_seeded_wp_integration() {
+        $repo = new FAT_Tools_Repository();
+
+        $default_wp_integration = array(
+            'seo-excerpt'             => array(
+                'source' => array(
+                    'type'             => 'post',
+                    'allow_manual'     => 1,
+                    'allow_draft'      => 1,
+                    'allow_publish'    => 1,
+                    'allow_attachment' => 0,
+                ),
+                'apply'  => array(
+                    'target'   => 'post',
+                    'mappings' => array(
+                        array(
+                            'output_key' => 'excerpt',
+                            'wp_field'   => 'post_excerpt',
+                            'label'      => 'Post Excerpt',
+                        ),
+                    ),
+                ),
+            ),
+            'combined-publishing-tool' => array(
+                'source' => array(
+                    'type'             => 'post',
+                    'allow_manual'     => 1,
+                    'allow_draft'      => 1,
+                    'allow_publish'    => 1,
+                    'allow_attachment' => 0,
+                ),
+                'apply'  => array(
+                    'target'   => 'post',
+                    'mappings' => array(
+                        array(
+                            'output_key' => 'excerpt',
+                            'wp_field'   => 'post_excerpt',
+                            'label'      => 'Post Excerpt',
+                        ),
+                    ),
+                ),
+            ),
+        );
+
+        foreach ( $default_wp_integration as $slug => $config ) {
+            $tool = $repo->get_by_slug( $slug );
+            if ( ! $tool ) {
+                continue;
+            }
+
+            $existing = (array) FAT_Helpers::array_get( $tool, 'wp_integration', array() );
+            if ( ! empty( $existing ) ) {
+                continue;
+            }
+
+            $repo->update(
+                (int) $tool['id'],
+                array(
+                    'wp_integration' => $config,
+                )
+            );
+        }
     }
 }
