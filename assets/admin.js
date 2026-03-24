@@ -698,7 +698,7 @@
 
                 const input = document.createElement('input');
                 input.type = 'checkbox';
-                input.value = mapping.apply_key;
+                input.value = mapping.field || mapping.apply_key || '';
                 input.checked = index === 0;
 
                 row.appendChild(input);
