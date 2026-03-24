@@ -1,0 +1,42 @@
+<?php
+/**
+ * Plugin Name: Fabled AI Tools
+ * Plugin URI: https://example.com/
+ * Description: Modular admin-managed AI tools for WordPress using server-side OpenAI Responses API calls.
+ * Version: 1.0.0
+ * Author: OpenAI
+ * Text Domain: fabled-ai-tools
+ */
+
+if ( ! defined( 'ABSPATH' ) ) {
+    exit;
+}
+
+define( 'FAT_VERSION', '1.0.0' );
+define( 'FAT_PLUGIN_FILE', __FILE__ );
+define( 'FAT_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
+define( 'FAT_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
+define( 'FAT_DB_VERSION', '1.0.0' );
+
+require_once FAT_PLUGIN_DIR . 'includes/class-fat-helpers.php';
+require_once FAT_PLUGIN_DIR . 'includes/class-fat-settings.php';
+require_once FAT_PLUGIN_DIR . 'includes/class-fat-activator.php';
+require_once FAT_PLUGIN_DIR . 'includes/class-fat-tools-repository.php';
+require_once FAT_PLUGIN_DIR . 'includes/class-fat-runs-repository.php';
+require_once FAT_PLUGIN_DIR . 'includes/class-fat-tool-validator.php';
+require_once FAT_PLUGIN_DIR . 'includes/class-fat-prompt-engine.php';
+require_once FAT_PLUGIN_DIR . 'includes/class-fat-openai-client.php';
+require_once FAT_PLUGIN_DIR . 'includes/class-fat-usage-limiter.php';
+require_once FAT_PLUGIN_DIR . 'includes/class-fat-tool-runner.php';
+require_once FAT_PLUGIN_DIR . 'includes/class-fat-rest-controller.php';
+require_once FAT_PLUGIN_DIR . 'includes/class-fat-admin.php';
+require_once FAT_PLUGIN_DIR . 'includes/class-fat-plugin.php';
+
+register_activation_hook( __FILE__, array( 'FAT_Activator', 'activate' ) );
+register_deactivation_hook( __FILE__, array( 'FAT_Activator', 'deactivate' ) );
+
+function fat_plugin() {
+    return FAT_Plugin::instance();
+}
+
+add_action( 'plugins_loaded', 'fat_plugin' );
