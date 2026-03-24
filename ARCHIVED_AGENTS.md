@@ -1,5 +1,9 @@
-# AGENTS.md
+# ARCHIVED AGENTS.md
+Past tasks for this document. Current tasks see [AGENTS.md](https://github.com/sherafyk/fabled-ai-tools/blob/main/AGENTS.md)
 
+
+
+2026-03-23
 ## Purpose
 This repository contains a WordPress plugin: **Fabled AI Tools**.
 
