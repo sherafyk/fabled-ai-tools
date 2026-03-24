@@ -111,6 +111,7 @@ class FAT_REST_Controller {
     }
 
     public function apply_outputs( WP_REST_Request $request ) {
+        error_log( 'FAT APPLY REST: raw body=' . (string) $request->get_body() );
         $tool_id      = absint( $request->get_param( 'tool_id' ) );
         $target_type  = sanitize_key( $request->get_param( 'target_type' ) );
         $target_id    = absint( $request->get_param( 'target_id' ) );
