@@ -10,6 +10,7 @@ class FAT_Activator {
         self::add_capabilities();
         self::seed_example_tools();
         self::maybe_backfill_seeded_wp_integration();
+        self::maybe_repair_corrupted_seeded_tools();
         update_option( 'fat_db_version', FAT_DB_VERSION );
     }
 
@@ -23,6 +24,7 @@ class FAT_Activator {
             self::create_tables();
             self::add_capabilities();
             self::maybe_backfill_seeded_wp_integration();
+            self::maybe_repair_corrupted_seeded_tools();
             update_option( 'fat_db_version', FAT_DB_VERSION );
         }
     }
@@ -379,10 +381,202 @@ class FAT_Activator {
 
             $repo->update(
                 (int) $tool['id'],
-                array(
+                array_merge(
+                    $tool,
+                    array(
                     'wp_integration' => $config,
+                    )
                 )
             );
         }
+    }
+
+    protected static function maybe_repair_corrupted_seeded_tools() {
+        $repo  = new FAT_Tools_Repository();
+        $tools = $repo->get_all();
+
+        $known = self::seeded_tool_blueprints();
+        $existing_by_slug = array();
+        foreach ( $tools as $tool ) {
+            $slug = sanitize_title( FAT_Helpers::array_get( $tool, 'slug', '' ) );
+            if ( '' !== $slug ) {
+                $existing_by_slug[ $slug ] = $tool;
+            }
+        }
+
+        $corrupted = array();
+        foreach ( $tools as $tool ) {
+            $name = trim( (string) FAT_Helpers::array_get( $tool, 'name', '' ) );
+            $slug = sanitize_title( FAT_Helpers::array_get( $tool, 'slug', '' ) );
+            if ( '' === $name || '' === $slug ) {
+                $corrupted[] = $tool;
+            }
+        }
+
+        foreach ( $known as $slug => $blueprint ) {
+            if ( isset( $existing_by_slug[ $slug ] ) ) {
+                continue;
+            }
+            if ( empty( $corrupted ) ) {
+                continue;
+            }
+
+            $target = array_shift( $corrupted );
+            $repo->update(
+                (int) FAT_Helpers::array_get( $target, 'id', 0 ),
+                array_merge(
+                    $target,
+                    $blueprint
+                )
+            );
+        }
+    }
+
+    protected static function seeded_tool_blueprints() {
+        return array(
+            'seo-excerpt' => array(
+                'name'                 => 'SEO Excerpt',
+                'slug'                 => 'seo-excerpt',
+                'description'          => 'Generates a plain-text SEO-friendly excerpt in roughly 75 to 80 words.',
+                'is_active'            => 1,
+                'allowed_roles'        => array( 'administrator', 'editor', 'author' ),
+                'allowed_capabilities' => array(),
+                'model'                => '',
+                'system_prompt'        => "You write SEO-friendly plain-text excerpts for article previews. Keep the excerpt approximately 75 to 80 words, readable, compelling, and factually grounded in the source article. Do not use markdown, bullets, labels, or quotation marks unless they are required by the source text.",
+                'user_prompt_template' => "Write one SEO-friendly excerpt for the article below.\n\nArticle body:\n{{input.article_body}}\n\nRequirements:\n- Approximately 75 to 80 words.\n- Plain text only.\n- No preamble or explanation.",
+                'input_schema'         => array(
+                    array(
+                        'key'         => 'article_body',
+                        'label'       => 'Article Body',
+                        'type'        => 'textarea',
+                        'required'    => 1,
+                        'help_text'   => 'Paste the full article body text.',
+                        'placeholder' => 'Paste article content here...',
+                        'max_length'  => 30000,
+                    ),
+                ),
+                'output_schema'        => array(
+                    array(
+                        'key'      => 'excerpt',
+                        'label'    => 'Excerpt',
+                        'type'     => 'long_text',
+                        'copyable' => 1,
+                    ),
+                ),
+                'wp_integration'       => array(
+                    'source' => array(
+                        'type'             => 'post',
+                        'allow_manual'     => 1,
+                        'allow_draft'      => 1,
+                        'allow_publish'    => 1,
+                        'allow_attachment' => 0,
+                    ),
+                    'apply'  => array(
+                        'target'   => 'post',
+                        'mappings' => array(
+                            array(
+                                'output_key' => 'excerpt',
+                                'wp_field'   => 'post_excerpt',
+                                'label'      => 'Post Excerpt',
+                            ),
+                        ),
+                    ),
+                ),
+                'max_input_chars'      => 30000,
+                'max_output_tokens'    => 250,
+                'daily_run_limit'      => 25,
+                'log_inputs'           => 0,
+                'log_outputs'          => 1,
+                'sort_order'           => 20,
+            ),
+            'combined-publishing-tool' => array(
+                'name'                 => 'Combined Publishing Tool',
+                'slug'                 => 'combined-publishing-tool',
+                'description'          => 'Creates a plain-text excerpt and a featured image prompt from common article inputs.',
+                'is_active'            => 1,
+                'allowed_roles'        => array( 'administrator', 'editor', 'author' ),
+                'allowed_capabilities' => array(),
+                'model'                => '',
+                'system_prompt'        => "You are an editorial production assistant. Produce concise, useful publishing outputs from the article data provided. Keep every output clean and directly usable with no surrounding commentary.",
+                'user_prompt_template' => "Use the article data below to generate the requested outputs.\n\nTitle:\n{{input.title}}\n\nURL:\n{{input.url}}\n\nArticle body:\n{{input.article_body}}\n\nExtra instructions:\n{{input.extra_instructions}}\n\nRequirements:\n- excerpt: plain text only, approximately 75 to 80 words, SEO-friendly.\n- image_prompt: detailed, visually specific, editorially appropriate, directly usable in an image generation system.\n- No markdown, labels, or explanations inside field values.",
+                'input_schema'         => array(
+                    array(
+                        'key'         => 'title',
+                        'label'       => 'Title',
+                        'type'        => 'text',
+                        'required'    => 1,
+                        'help_text'   => 'Article title.',
+                        'placeholder' => 'Enter article title',
+                        'max_length'  => 250,
+                    ),
+                    array(
+                        'key'         => 'url',
+                        'label'       => 'URL',
+                        'type'        => 'url',
+                        'required'    => 1,
+                        'help_text'   => 'Canonical article URL.',
+                        'placeholder' => 'https://example.com/article',
+                        'max_length'  => 500,
+                    ),
+                    array(
+                        'key'         => 'article_body',
+                        'label'       => 'Article Body',
+                        'type'        => 'textarea',
+                        'required'    => 1,
+                        'help_text'   => 'Main article body.',
+                        'placeholder' => 'Paste article content here...',
+                        'max_length'  => 30000,
+                    ),
+                    array(
+                        'key'         => 'extra_instructions',
+                        'label'       => 'Extra Instructions',
+                        'type'        => 'textarea',
+                        'required'    => 0,
+                        'help_text'   => 'Optional editorial constraints or preferences.',
+                        'placeholder' => 'Optional instructions',
+                        'max_length'  => 4000,
+                    ),
+                ),
+                'output_schema'        => array(
+                    array(
+                        'key'      => 'excerpt',
+                        'label'    => 'Excerpt',
+                        'type'     => 'long_text',
+                        'copyable' => 1,
+                    ),
+                    array(
+                        'key'      => 'image_prompt',
+                        'label'    => 'Image Prompt',
+                        'type'     => 'long_text',
+                        'copyable' => 1,
+                    ),
+                ),
+                'wp_integration'       => array(
+                    'source' => array(
+                        'type'             => 'post',
+                        'allow_manual'     => 1,
+                        'allow_draft'      => 1,
+                        'allow_publish'    => 1,
+                        'allow_attachment' => 0,
+                    ),
+                    'apply'  => array(
+                        'target'   => 'post',
+                        'mappings' => array(
+                            array(
+                                'output_key' => 'excerpt',
+                                'wp_field'   => 'post_excerpt',
+                                'label'      => 'Post Excerpt',
+                            ),
+                        ),
+                    ),
+                ),
+                'max_input_chars'      => 36000,
+                'max_output_tokens'    => 600,
+                'daily_run_limit'      => 20,
+                'log_inputs'           => 0,
+                'log_outputs'          => 1,
+                'sort_order'           => 30,
+            ),
+        );
     }
 }
