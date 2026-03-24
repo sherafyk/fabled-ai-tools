@@ -53,6 +53,10 @@ class FAT_Prompt_Engine {
     }
 
     public function public_tool_definition( $tool ) {
+        $wp_integration = (array) FAT_Helpers::array_get( $tool, 'wp_integration', array() );
+        $source         = (array) FAT_Helpers::array_get( $wp_integration, 'source', array() );
+        $apply          = (array) FAT_Helpers::array_get( $wp_integration, 'apply', array() );
+
         return array(
             'id'              => (int) FAT_Helpers::array_get( $tool, 'id', 0 ),
             'name'            => (string) FAT_Helpers::array_get( $tool, 'name', '' ),
@@ -61,6 +65,19 @@ class FAT_Prompt_Engine {
             'max_input_chars' => (int) FAT_Helpers::array_get( $tool, 'max_input_chars', 0 ),
             'input_schema'    => array_values( (array) FAT_Helpers::array_get( $tool, 'input_schema', array() ) ),
             'output_schema'   => array_values( (array) FAT_Helpers::array_get( $tool, 'output_schema', array() ) ),
+            'wp_integration'  => array(
+                'source' => array(
+                    'type'             => sanitize_key( FAT_Helpers::array_get( $source, 'type', '' ) ),
+                    'allow_manual'     => ! empty( $source['allow_manual'] ),
+                    'allow_draft'      => ! empty( $source['allow_draft'] ),
+                    'allow_publish'    => ! empty( $source['allow_publish'] ),
+                    'allow_attachment' => ! empty( $source['allow_attachment'] ),
+                ),
+                'apply'  => array(
+                    'target'   => sanitize_key( FAT_Helpers::array_get( $apply, 'target', '' ) ),
+                    'mappings' => array_values( (array) FAT_Helpers::array_get( $apply, 'mappings', array() ) ),
+                ),
+            ),
         );
     }
 
