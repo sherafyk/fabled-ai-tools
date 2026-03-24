@@ -1,0 +1,165 @@
+.fat-wrap .fat-card {
+    background: #fff;
+    border: 1px solid #dcdcde;
+    border-radius: 6px;
+    padding: 20px;
+    margin: 16px 0;
+}
+
+.fat-header-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+}
+
+.fat-header-row h1,
+.fat-header-row h2 {
+    margin: 0;
+}
+
+.fat-form-row,
+.fat-filter-bar,
+.fat-runner-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.fat-runner-toolbar select {
+    min-width: 280px;
+}
+
+.fat-tool-meta h2 {
+    margin-bottom: 6px;
+}
+
+.fat-muted,
+.fat-tool-meta .fat-muted {
+    color: #646970;
+}
+
+.fat-table-card {
+    overflow-x: auto;
+}
+
+.fat-table td,
+.fat-table th,
+.fat-schema-table td,
+.fat-schema-table th {
+    vertical-align: top;
+}
+
+.fat-schema-table input[type="text"],
+.fat-schema-table input[type="number"],
+.fat-schema-table select {
+    width: 100%;
+}
+
+.fat-inline-check {
+    display: inline-block;
+    margin: 0 14px 8px 0;
+}
+
+.fat-pill {
+    display: inline-block;
+    padding: 4px 10px;
+    border: 1px solid #c3c4c7;
+    border-radius: 999px;
+    font-size: 12px;
+    line-height: 1.2;
+}
+
+.fat-pill-success {
+    border-color: #00a32a;
+}
+
+#fat-input-fields {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 16px;
+    margin-top: 16px;
+}
+
+.fat-field label {
+    display: block;
+    font-weight: 600;
+    margin-bottom: 6px;
+}
+
+.fat-field input,
+.fat-field textarea,
+.fat-output-card textarea {
+    width: 100%;
+    max-width: 100%;
+}
+
+.fat-required,
+.fat-optional {
+    font-size: 12px;
+    font-weight: 400;
+    color: #646970;
+}
+
+.fat-runner-status {
+    margin-top: 12px;
+    font-weight: 600;
+}
+
+.fat-runner-status.is-loading {
+    color: #646970;
+}
+
+.fat-runner-status.is-error {
+    color: #d63638;
+}
+
+.fat-runner-status.is-success {
+    color: #00a32a;
+}
+
+.fat-output-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 16px;
+    margin-top: 20px;
+}
+
+.fat-output-card {
+    border: 1px solid #dcdcde;
+    border-radius: 6px;
+    padding: 14px;
+    background: #fcfcfc;
+}
+
+.fat-output-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 10px;
+}
+
+.fat-output-header h3 {
+    margin: 0;
+    font-size: 15px;
+}
+
+.fat-output-meta {
+    color: #646970;
+    font-size: 13px;
+}
+
+.fat-log-detail pre,
+.fat-log-preview,
+.fat-card pre {
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+@media (min-width: 900px) {
+    .fat-output-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+}

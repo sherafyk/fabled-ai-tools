@@ -1,0 +1,283 @@
+<?php
+
+if ( ! defined( 'ABSPATH' ) ) {
+    exit;
+}
+
+class FAT_Activator {
+    public static function activate() {
+        self::create_tables();
+        self::add_capabilities();
+        self::seed_example_tools();
+        update_option( 'fat_db_version', FAT_DB_VERSION );
+    }
+
+    public static function deactivate() {
+        // Intentionally left blank.
+    }
+
+    public static function maybe_upgrade() {
+        $installed = get_option( 'fat_db_version', '' );
+        if ( FAT_DB_VERSION !== $installed ) {
+            self::create_tables();
+            self::add_capabilities();
+            update_option( 'fat_db_version', FAT_DB_VERSION );
+        }
+    }
+
+    public static function add_capabilities() {
+        $cap_map = array(
+            'administrator' => array(
+                'fat_run_ai_tools',
+                'fat_manage_tools',
+                'fat_view_ai_logs',
+                'fat_manage_ai_settings',
+            ),
+            'editor'        => array(
+                'fat_run_ai_tools',
+            ),
+            'author'        => array(
+                'fat_run_ai_tools',
+            ),
+        );
+
+        foreach ( $cap_map as $role_name => $caps ) {
+            $role = get_role( $role_name );
+            if ( ! $role ) {
+                continue;
+            }
+
+            foreach ( $caps as $cap ) {
+                $role->add_cap( $cap );
+            }
+        }
+    }
+
+    protected static function create_tables() {
+        global $wpdb;
+
+        require_once ABSPATH . 'wp-admin/includes/upgrade.php';
+
+        $charset_collate = $wpdb->get_charset_collate();
+        $tools_table     = $wpdb->prefix . 'fat_tools';
+        $runs_table      = $wpdb->prefix . 'fat_runs';
+
+        $sql_tools = "CREATE TABLE {$tools_table} (
+            id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+            name varchar(200) NOT NULL,
+            slug varchar(190) NOT NULL,
+            description text NULL,
+            is_active tinyint(1) NOT NULL DEFAULT 1,
+            allowed_roles longtext NULL,
+            allowed_capabilities longtext NULL,
+            model varchar(100) NULL,
+            system_prompt longtext NULL,
+            user_prompt_template longtext NULL,
+            input_schema longtext NULL,
+            output_schema longtext NULL,
+            max_input_chars int(10) unsigned NOT NULL DEFAULT 20000,
+            max_output_tokens int(10) unsigned NOT NULL DEFAULT 700,
+            daily_run_limit int(10) unsigned NOT NULL DEFAULT 0,
+            log_inputs tinyint(1) NOT NULL DEFAULT 0,
+            log_outputs tinyint(1) NOT NULL DEFAULT 1,
+            sort_order int(10) NOT NULL DEFAULT 0,
+            created_at datetime NOT NULL,
+            updated_at datetime NOT NULL,
+            PRIMARY KEY  (id),
+            UNIQUE KEY slug (slug),
+            KEY is_active (is_active),
+            KEY sort_order (sort_order)
+        ) {$charset_collate};";
+
+        $sql_runs = "CREATE TABLE {$runs_table} (
+            id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+            tool_id bigint(20) unsigned NOT NULL,
+            user_id bigint(20) unsigned NOT NULL,
+            status varchar(20) NOT NULL,
+            request_preview text NULL,
+            response_preview text NULL,
+            request_payload longtext NULL,
+            response_payload longtext NULL,
+            error_message text NULL,
+            model_used varchar(100) NULL,
+            prompt_tokens int(10) unsigned NULL,
+            completion_tokens int(10) unsigned NULL,
+            total_tokens int(10) unsigned NULL,
+            latency_ms int(10) unsigned NULL,
+            openai_request_id varchar(255) NULL,
+            created_at datetime NOT NULL,
+            PRIMARY KEY  (id),
+            KEY tool_id (tool_id),
+            KEY user_id (user_id),
+            KEY status (status),
+            KEY created_at (created_at)
+        ) {$charset_collate};";
+
+        dbDelta( $sql_tools );
+        dbDelta( $sql_runs );
+    }
+
+    protected static function seed_example_tools() {
+        global $wpdb;
+
+        $table = $wpdb->prefix . 'fat_tools';
+        $count = (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$table}" );
+        if ( $count > 0 ) {
+            return;
+        }
+
+        $repo = new FAT_Tools_Repository();
+
+        $common_roles = array( 'administrator', 'editor', 'author' );
+
+        $repo->create(
+            array(
+                'name'                 => 'Featured Image Prompt',
+                'slug'                 => 'featured-image-prompt',
+                'description'          => 'Turns article body text into a single featured image prompt for an external image generation system.',
+                'is_active'            => 1,
+                'allowed_roles'        => $common_roles,
+                'allowed_capabilities' => array(),
+                'model'                => '',
+                'system_prompt'        => "You create one high-quality featured image prompt from article content. The prompt must be visually specific, editorially relevant, publication-safe, and directly usable in an image generation system. Do not add markdown, labels, preamble, explanation, quotes, or multiple options.",
+                'user_prompt_template' => "Create a single detailed featured image prompt based on the article below.\n\nArticle body:\n{{input.article_body}}\n\nRequirements:\n- Return only the prompt content.\n- Start immediately with the prompt.\n- Keep it visually concrete and publication-ready.",
+                'input_schema'         => array(
+                    array(
+                        'key'         => 'article_body',
+                        'label'       => 'Article Body',
+                        'type'        => 'textarea',
+                        'required'    => 1,
+                        'help_text'   => 'Paste the full article body text.',
+                        'placeholder' => 'Paste article content here...',
+                        'max_length'  => 30000,
+                    ),
+                ),
+                'output_schema'        => array(
+                    array(
+                        'key'      => 'image_prompt',
+                        'label'    => 'Image Prompt',
+                        'type'     => 'long_text',
+                        'copyable' => 1,
+                    ),
+                ),
+                'max_input_chars'      => 30000,
+                'max_output_tokens'    => 450,
+                'daily_run_limit'      => 25,
+                'log_inputs'           => 0,
+                'log_outputs'          => 1,
+                'sort_order'           => 10,
+            )
+        );
+
+        $repo->create(
+            array(
+                'name'                 => 'SEO Excerpt',
+                'slug'                 => 'seo-excerpt',
+                'description'          => 'Generates a plain-text SEO-friendly excerpt in roughly 75 to 80 words.',
+                'is_active'            => 1,
+                'allowed_roles'        => $common_roles,
+                'allowed_capabilities' => array(),
+                'model'                => '',
+                'system_prompt'        => "You write SEO-friendly plain-text excerpts for article previews. Keep the excerpt approximately 75 to 80 words, readable, compelling, and factually grounded in the source article. Do not use markdown, bullets, labels, or quotation marks unless they are required by the source text.",
+                'user_prompt_template' => "Write one SEO-friendly excerpt for the article below.\n\nArticle body:\n{{input.article_body}}\n\nRequirements:\n- Approximately 75 to 80 words.\n- Plain text only.\n- No preamble or explanation.",
+                'input_schema'         => array(
+                    array(
+                        'key'         => 'article_body',
+                        'label'       => 'Article Body',
+                        'type'        => 'textarea',
+                        'required'    => 1,
+                        'help_text'   => 'Paste the full article body text.',
+                        'placeholder' => 'Paste article content here...',
+                        'max_length'  => 30000,
+                    ),
+                ),
+                'output_schema'        => array(
+                    array(
+                        'key'      => 'excerpt',
+                        'label'    => 'Excerpt',
+                        'type'     => 'long_text',
+                        'copyable' => 1,
+                    ),
+                ),
+                'max_input_chars'      => 30000,
+                'max_output_tokens'    => 250,
+                'daily_run_limit'      => 25,
+                'log_inputs'           => 0,
+                'log_outputs'          => 1,
+                'sort_order'           => 20,
+            )
+        );
+
+        $repo->create(
+            array(
+                'name'                 => 'Combined Publishing Tool',
+                'slug'                 => 'combined-publishing-tool',
+                'description'          => 'Creates a plain-text excerpt and a featured image prompt from common article inputs.',
+                'is_active'            => 1,
+                'allowed_roles'        => $common_roles,
+                'allowed_capabilities' => array(),
+                'model'                => '',
+                'system_prompt'        => "You are an editorial production assistant. Produce concise, useful publishing outputs from the article data provided. Keep every output clean and directly usable with no surrounding commentary.",
+                'user_prompt_template' => "Use the article data below to generate the requested outputs.\n\nTitle:\n{{input.title}}\n\nURL:\n{{input.url}}\n\nArticle body:\n{{input.article_body}}\n\nExtra instructions:\n{{input.extra_instructions}}\n\nRequirements:\n- excerpt: plain text only, approximately 75 to 80 words, SEO-friendly.\n- image_prompt: detailed, visually specific, editorially appropriate, directly usable in an image generation system.\n- No markdown, labels, or explanations inside field values.",
+                'input_schema'         => array(
+                    array(
+                        'key'         => 'title',
+                        'label'       => 'Title',
+                        'type'        => 'text',
+                        'required'    => 1,
+                        'help_text'   => 'Article title.',
+                        'placeholder' => 'Enter article title',
+                        'max_length'  => 250,
+                    ),
+                    array(
+                        'key'         => 'url',
+                        'label'       => 'URL',
+                        'type'        => 'url',
+                        'required'    => 1,
+                        'help_text'   => 'Canonical article URL.',
+                        'placeholder' => 'https://example.com/article',
+                        'max_length'  => 500,
+                    ),
+                    array(
+                        'key'         => 'article_body',
+                        'label'       => 'Article Body',
+                        'type'        => 'textarea',
+                        'required'    => 1,
+                        'help_text'   => 'Main article body.',
+                        'placeholder' => 'Paste article content here...',
+                        'max_length'  => 30000,
+                    ),
+                    array(
+                        'key'         => 'extra_instructions',
+                        'label'       => 'Extra Instructions',
+                        'type'        => 'textarea',
+                        'required'    => 0,
+                        'help_text'   => 'Optional editorial constraints or preferences.',
+                        'placeholder' => 'Optional instructions',
+                        'max_length'  => 4000,
+                    ),
+                ),
+                'output_schema'        => array(
+                    array(
+                        'key'      => 'excerpt',
+                        'label'    => 'Excerpt',
+                        'type'     => 'long_text',
+                        'copyable' => 1,
+                    ),
+                    array(
+                        'key'      => 'image_prompt',
+                        'label'    => 'Image Prompt',
+                        'type'     => 'long_text',
+                        'copyable' => 1,
+                    ),
+                ),
+                'max_input_chars'      => 36000,
+                'max_output_tokens'    => 600,
+                'daily_run_limit'      => 20,
+                'log_inputs'           => 0,
+                'log_outputs'          => 1,
+                'sort_order'           => 30,
+            )
+        );
+    }
+}
