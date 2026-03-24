@@ -133,6 +133,13 @@
     color: #00a32a;
 }
 
+.fat-runner-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
 .fat-output-grid {
     display: grid;
     grid-template-columns: 1fr;
@@ -163,6 +170,14 @@
 .fat-output-meta {
     color: #646970;
     font-size: 13px;
+}
+
+.fat-apply-list {
+    margin-bottom: 10px;
+}
+
+.fat-apply-panel h3 {
+    margin-top: 0;
 }
 
 .fat-log-detail pre,

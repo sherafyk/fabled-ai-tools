@@ -110,6 +110,7 @@ class FAT_Admin {
             array(
                 'page'    => $this->current_page(),
                 'restUrl' => esc_url_raw( rest_url( 'fabled-ai-tools/v1/run' ) ),
+                'applyUrl' => esc_url_raw( rest_url( 'fabled-ai-tools/v1/apply' ) ),
                 'ajaxUrl' => esc_url_raw( admin_url( 'admin-ajax.php' ) ),
                 'nonce'   => wp_create_nonce( 'wp_rest' ),
                 'postsNonce' => wp_create_nonce( 'fat_runner_posts' ),
@@ -134,6 +135,24 @@ class FAT_Admin {
                     'loadPostsError' => __( 'Unable to load posts for this source.', 'fabled-ai-tools' ),
                     'postSelectionRequired' => __( 'Please select a post for the chosen content source.', 'fabled-ai-tools' ),
                     'bodyFilledFromPost' => __( 'Article body will be pulled from the selected post.', 'fabled-ai-tools' ),
+                    'mediaSource'   => __( 'Media Source', 'fabled-ai-tools' ),
+                    'selectMedia'   => __( 'Select Media Attachment', 'fabled-ai-tools' ),
+                    'loadingMedia'  => __( 'Loading media…', 'fabled-ai-tools' ),
+                    'chooseMedia'   => __( 'Choose an attachment', 'fabled-ai-tools' ),
+                    'noMediaFound'  => __( 'No attachments found.', 'fabled-ai-tools' ),
+                    'loadMediaError'=> __( 'Unable to load attachments.', 'fabled-ai-tools' ),
+                    'mediaSelectionRequired' => __( 'Please select an attachment.', 'fabled-ai-tools' ),
+                    'generate'      => __( 'Generate', 'fabled-ai-tools' ),
+                    'generateApply' => __( 'Generate + Apply', 'fabled-ai-tools' ),
+                    'applySelected' => __( 'Apply Selected Fields', 'fabled-ai-tools' ),
+                    'applyPanelTitle' => __( 'Apply to WordPress', 'fabled-ai-tools' ),
+                    'applyTarget'   => __( 'Target', 'fabled-ai-tools' ),
+                    'applyFields'   => __( 'Fields to apply', 'fabled-ai-tools' ),
+                    'applySuccess'  => __( 'Selected fields were applied successfully.', 'fabled-ai-tools' ),
+                    'applyError'    => __( 'Unable to apply selected outputs.', 'fabled-ai-tools' ),
+                    'applyNoFields' => __( 'Select at least one field to apply.', 'fabled-ai-tools' ),
+                    'applyTargetRequired' => __( 'Please choose a target before applying.', 'fabled-ai-tools' ),
+                    'applyUnavailable' => __( 'No apply mappings are available for the generated outputs.', 'fabled-ai-tools' ),
                     'addInputField'  => __( 'Add Input Field', 'fabled-ai-tools' ),
                     'addOutputField' => __( 'Add Output Field', 'fabled-ai-tools' ),
                 ),
@@ -316,7 +335,7 @@ class FAT_Admin {
                     <form id="fat-runner-form">
                         <div id="fat-input-fields"></div>
                         <p>
-                            <button type="submit" class="button button-primary" id="fat-runner-submit"><?php esc_html_e( 'Run Tool', 'fabled-ai-tools' ); ?></button>
+                            <button type="submit" class="button button-primary" id="fat-runner-submit"><?php esc_html_e( 'Generate', 'fabled-ai-tools' ); ?></button>
                         </p>
                     </form>
 

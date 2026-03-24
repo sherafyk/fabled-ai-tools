@@ -104,12 +104,22 @@
         const tools = Array.isArray(data.tools) ? data.tools : [];
         const byId = {};
         const postCache = {};
+        const attachmentCache = { items: null };
         const contentSourceState = {
             source: 'paste',
             selectedPostId: '',
+            selectedAttachmentId: '',
             controls: null,
-            articleInput: null
+            articleInput: null,
+            attachmentControls: null
         };
+        const runState = {
+            outputs: null,
+            applyMeta: null,
+            targetType: '',
+            targetId: ''
+        };
+
         tools.forEach(function (tool) {
             byId[String(tool.id)] = tool;
         });
@@ -128,6 +138,13 @@
                 statusWrap.classList.add('is-' + type);
             }
             statusWrap.textContent = message || '';
+        }
+
+        function resetRunState() {
+            runState.outputs = null;
+            runState.applyMeta = null;
+            runState.targetType = '';
+            runState.targetId = '';
         }
 
         function renderToolMeta(tool) {
@@ -185,6 +202,26 @@
             }) || null;
         }
 
+        function getToolWpConfig(tool) {
+            const config = tool && tool.wp_integration ? tool.wp_integration : {};
+            const source = config.source || {};
+            const apply = config.apply || {};
+
+            return {
+                source: {
+                    type: source.type || '',
+                    allow_manual: !!source.allow_manual,
+                    allow_draft: !!source.allow_draft,
+                    allow_publish: !!source.allow_publish,
+                    allow_attachment: !!source.allow_attachment
+                },
+                apply: {
+                    target: apply.target || '',
+                    mappings: Array.isArray(apply.mappings) ? apply.mappings : []
+                }
+            };
+        }
+
         async function loadPostsForStatus(status) {
             if (postCache[status]) {
                 return postCache[status];
@@ -211,6 +248,31 @@
             return posts;
         }
 
+        async function loadAttachments() {
+            if (Array.isArray(attachmentCache.items)) {
+                return attachmentCache.items;
+            }
+
+            const endpoint = new URL(data.ajaxUrl || '', window.location.origin);
+            endpoint.searchParams.set('action', 'fat_runner_attachments');
+            endpoint.searchParams.set('nonce', data.postsNonce || '');
+
+            const response = await fetch(endpoint.toString(), {
+                method: 'GET',
+                credentials: 'same-origin'
+            });
+            const payload = await response.json();
+
+            if (!response.ok || !payload.success) {
+                const defaultMessage = data.strings.loadMediaError || 'Unable to load attachments.';
+                throw new Error((payload && payload.data && payload.data.message) ? payload.data.message : defaultMessage);
+            }
+
+            const attachments = Array.isArray(payload.data.attachments) ? payload.data.attachments : [];
+            attachmentCache.items = attachments;
+            return attachments;
+        }
+
         function setArticleInputState(disabled) {
             if (!contentSourceState.articleInput) {
                 return;
@@ -218,32 +280,31 @@
             contentSourceState.articleInput.disabled = !!disabled;
         }
 
-        function buildPostOptions(selectEl, posts) {
+        function buildOptions(selectEl, items, placeholderText, formatLabel) {
             const placeholder = document.createElement('option');
             placeholder.value = '';
-            placeholder.textContent = data.strings.choosePost || 'Choose a post';
+            placeholder.textContent = placeholderText;
             selectEl.appendChild(placeholder);
 
-            posts.forEach(function (post) {
+            items.forEach(function (item) {
                 const option = document.createElement('option');
-                option.value = String(post.id || '');
-                option.textContent = post.title || ('#' + post.id);
+                option.value = String(item.id || '');
+                option.textContent = formatLabel(item);
                 selectEl.appendChild(option);
             });
         }
 
         function renderArticleSourceControls(tool) {
-            const articleField = getToolInputField(tool, 'article_body');
-            if (!articleField) {
+            const articleInput = document.getElementById('fat-input-article_body');
+            const wpConfig = getToolWpConfig(tool);
+            const legacySourceSupport = !wpConfig.source.type && !!getToolInputField(tool, 'article_body');
+            const shouldShow = !!articleInput && (wpConfig.source.type === 'post' || legacySourceSupport);
+
+            if (!shouldShow) {
                 contentSourceState.controls = null;
-                contentSourceState.articleInput = null;
+                contentSourceState.articleInput = articleInput || null;
                 contentSourceState.source = 'paste';
                 contentSourceState.selectedPostId = '';
-                return;
-            }
-
-            const articleInput = document.getElementById('fat-input-article_body');
-            if (!articleInput) {
                 return;
             }
 
@@ -262,11 +323,23 @@
             const sourceSelect = document.createElement('select');
             sourceSelect.id = 'fat-content-source';
             sourceSelect.className = 'fat-content-source-select';
-            [
-                { value: 'paste', label: data.strings.pasteContent || 'Paste Content' },
-                { value: 'draft', label: data.strings.selectDraft || 'Select Draft' },
-                { value: 'publish', label: data.strings.selectPublished || 'Select Published Post' }
-            ].forEach(function (item) {
+
+            const sourceOptions = [];
+            const allowManual = wpConfig.source.type ? wpConfig.source.allow_manual : true;
+            const allowDraft = wpConfig.source.type ? wpConfig.source.allow_draft : true;
+            const allowPublish = wpConfig.source.type ? wpConfig.source.allow_publish : true;
+
+            if (allowManual) {
+                sourceOptions.push({ value: 'paste', label: data.strings.pasteContent || 'Paste Content' });
+            }
+            if (allowDraft) {
+                sourceOptions.push({ value: 'draft', label: data.strings.selectDraft || 'Select Draft' });
+            }
+            if (allowPublish) {
+                sourceOptions.push({ value: 'publish', label: data.strings.selectPublished || 'Select Published Post' });
+            }
+
+            sourceOptions.forEach(function (item) {
                 const option = document.createElement('option');
                 option.value = item.value;
                 option.textContent = item.label;
@@ -316,11 +389,15 @@
                 try {
                     const posts = await loadPostsForStatus(source);
                     postSelect.innerHTML = '';
-                    buildPostOptions(postSelect, posts);
+                    buildOptions(postSelect, posts, data.strings.choosePost || 'Choose a post', function (post) {
+                        return post.title || ('#' + post.id);
+                    });
                     postStatus.textContent = posts.length ? '' : (data.strings.noPostsFound || 'No posts found for this status.');
                 } catch (error) {
                     postSelect.innerHTML = '';
-                    buildPostOptions(postSelect, []);
+                    buildOptions(postSelect, [], data.strings.choosePost || 'Choose a post', function (post) {
+                        return post.title || ('#' + post.id);
+                    });
                     postStatus.textContent = error.message || (data.strings.loadPostsError || 'Unable to load posts for this source.');
                 }
             }
@@ -333,19 +410,110 @@
             });
 
             contentSourceState.controls = controlsWrap;
-            updateSourceUi('paste');
+            const defaultSource = sourceOptions.length ? sourceOptions[0].value : 'paste';
+            sourceSelect.value = defaultSource;
+            updateSourceUi(defaultSource);
+        }
+
+        function renderAttachmentSourceControls(tool) {
+            const wpConfig = getToolWpConfig(tool);
+            const shouldShow = wpConfig.source.type === 'attachment' || wpConfig.source.allow_attachment;
+
+            if (!shouldShow) {
+                contentSourceState.attachmentControls = null;
+                contentSourceState.selectedAttachmentId = '';
+                return;
+            }
+
+            contentSourceState.selectedAttachmentId = '';
+
+            const controlsWrap = document.createElement('div');
+            controlsWrap.className = 'fat-field fat-attachment-source-field';
+
+            const sourceLabel = document.createElement('label');
+            sourceLabel.setAttribute('for', 'fat-attachment-source');
+            sourceLabel.textContent = data.strings.mediaSource || 'Media Source';
+            controlsWrap.appendChild(sourceLabel);
+
+            const attachmentSelect = document.createElement('select');
+            attachmentSelect.id = 'fat-attachment-source';
+            attachmentSelect.className = 'fat-content-post-select';
+            controlsWrap.appendChild(attachmentSelect);
+
+            const attachmentStatus = document.createElement('p');
+            attachmentStatus.className = 'description';
+            controlsWrap.appendChild(attachmentStatus);
+
+            fieldsWrap.insertBefore(controlsWrap, fieldsWrap.firstChild);
+
+            attachmentSelect.addEventListener('change', function () {
+                contentSourceState.selectedAttachmentId = attachmentSelect.value || '';
+            });
+
+            async function hydrateAttachments() {
+                attachmentStatus.textContent = data.strings.loadingMedia || 'Loading media…';
+                attachmentSelect.innerHTML = '';
+
+                try {
+                    const attachments = await loadAttachments();
+                    buildOptions(attachmentSelect, attachments, data.strings.chooseMedia || 'Choose an attachment', function (attachment) {
+                        const title = attachment.title || ('#' + attachment.id);
+                        return attachment.filename ? title + ' (' + attachment.filename + ')' : title;
+                    });
+                    attachmentStatus.textContent = attachments.length ? '' : (data.strings.noMediaFound || 'No attachments found.');
+                } catch (error) {
+                    buildOptions(attachmentSelect, [], data.strings.chooseMedia || 'Choose an attachment', function (attachment) {
+                        return attachment.title || ('#' + attachment.id);
+                    });
+                    attachmentStatus.textContent = error.message || (data.strings.loadMediaError || 'Unable to load attachments.');
+                }
+            }
+
+            contentSourceState.attachmentControls = controlsWrap;
+            hydrateAttachments();
+        }
+
+        function renderRunnerActions() {
+            let actionRow = form.querySelector('.fat-runner-actions');
+            if (!actionRow) {
+                actionRow = document.createElement('p');
+                actionRow.className = 'fat-runner-actions';
+                form.appendChild(actionRow);
+            }
+
+            actionRow.innerHTML = '';
+
+            submit.textContent = data.strings.generate || 'Generate';
+            submit.className = 'button button-primary';
+            submit.type = 'submit';
+            actionRow.appendChild(submit);
+
+            const generateApplyButton = document.createElement('button');
+            generateApplyButton.type = 'button';
+            generateApplyButton.id = 'fat-runner-generate-apply';
+            generateApplyButton.className = 'button';
+            generateApplyButton.textContent = data.strings.generateApply || 'Generate + Apply';
+            generateApplyButton.hidden = true;
+            generateApplyButton.addEventListener('click', function () {
+                runTool({ preventDefault: function () {} }, { applyAfterGenerate: true });
+            });
+            actionRow.appendChild(generateApplyButton);
         }
 
         function renderInputs(tool) {
             fieldsWrap.innerHTML = '';
             outputsWrap.innerHTML = '';
             setStatus('');
+            resetRunState();
             renderToolMeta(tool);
 
             (tool.input_schema || []).forEach(function (field) {
                 fieldsWrap.appendChild(renderField(field));
             });
+
             renderArticleSourceControls(tool);
+            renderAttachmentSourceControls(tool);
+            renderRunnerActions();
         }
 
         function copyText(value, button) {
@@ -366,6 +534,196 @@
             helper.select();
             document.execCommand('copy');
             document.body.removeChild(helper);
+        }
+
+        function availableApplyMappings(applyMeta) {
+            const mappings = (applyMeta && Array.isArray(applyMeta.mappings)) ? applyMeta.mappings : [];
+            const outputKeys = (applyMeta && Array.isArray(applyMeta.output_keys)) ? applyMeta.output_keys : [];
+
+            return mappings.filter(function (mapping) {
+                return mapping && mapping.output_key && outputKeys.indexOf(mapping.output_key) !== -1;
+            });
+        }
+
+        function selectedApplyFields(panel) {
+            return Array.from(panel.querySelectorAll('input[type="checkbox"]:checked')).map(function (input) {
+                return input.value;
+            });
+        }
+
+        async function applyOutputs(context) {
+            const applyMeta = context && context.applyMeta ? context.applyMeta : runState.applyMeta;
+            const outputs = context && context.outputs ? context.outputs : runState.outputs;
+            const panel = context && context.panel ? context.panel : outputsWrap.querySelector('.fat-apply-panel');
+
+            if (!applyMeta || !outputs || !panel) {
+                setStatus(data.strings.applyUnavailable || 'No apply mappings are available for the generated outputs.', 'error');
+                return;
+            }
+
+            const applyFields = selectedApplyFields(panel);
+            if (!applyFields.length) {
+                setStatus(data.strings.applyNoFields || 'Select at least one field to apply.', 'error');
+                return;
+            }
+
+            let targetId = runState.targetId || String(applyMeta.target_id || '');
+            if (applyMeta.target_type === 'attachment') {
+                targetId = targetId || contentSourceState.selectedAttachmentId;
+            }
+
+            if (!targetId) {
+                setStatus(data.strings.applyTargetRequired || 'Please choose a target before applying.', 'error');
+                return;
+            }
+
+            const applyButton = panel.querySelector('.fat-apply-button');
+            const generateApplyButton = document.getElementById('fat-runner-generate-apply');
+            submit.disabled = true;
+            if (applyButton) {
+                applyButton.disabled = true;
+            }
+            if (generateApplyButton) {
+                generateApplyButton.disabled = true;
+            }
+            setStatus(data.strings.running || 'Running…', 'loading');
+
+            try {
+                const response = await fetch(data.applyUrl || '', {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-WP-Nonce': data.nonce
+                    },
+                    body: JSON.stringify({
+                        tool_id: selectedTool().id,
+                        target_type: applyMeta.target_type,
+                        target_id: parseInt(targetId, 10),
+                        outputs: outputs,
+                        apply_fields: applyFields
+                    })
+                });
+
+                const payload = await response.json();
+                if (!response.ok || !payload.success) {
+                    const message = (payload && payload.message) ? payload.message : (data.strings.applyError || 'Unable to apply selected outputs.');
+                    throw new Error(message);
+                }
+
+                setStatus(data.strings.applySuccess || 'Selected fields were applied successfully.', 'success');
+            } catch (error) {
+                setStatus(error.message || data.strings.applyError || 'Unable to apply selected outputs.', 'error');
+            } finally {
+                submit.disabled = false;
+                if (applyButton) {
+                    applyButton.disabled = false;
+                }
+                if (generateApplyButton) {
+                    generateApplyButton.disabled = false;
+                }
+            }
+        }
+
+        function renderApplyPanel(outputs, applyMeta) {
+            const mappings = availableApplyMappings(applyMeta);
+            if (!applyMeta || !applyMeta.enabled || !mappings.length) {
+                return null;
+            }
+
+            const panel = document.createElement('div');
+            panel.className = 'fat-apply-panel fat-output-card';
+
+            const title = document.createElement('h3');
+            title.textContent = data.strings.applyPanelTitle || 'Apply to WordPress';
+            panel.appendChild(title);
+
+            const help = document.createElement('p');
+            help.className = 'fat-muted';
+            help.textContent = data.strings.applyFields || 'Fields to apply';
+            panel.appendChild(help);
+
+            let selectedTargetId = String(applyMeta.target_id || '');
+            if (applyMeta.target_type === 'post') {
+                const targetWrap = document.createElement('div');
+                targetWrap.className = 'fat-field';
+
+                const label = document.createElement('label');
+                label.textContent = data.strings.applyTarget || 'Target';
+                targetWrap.appendChild(label);
+
+                const targetSelect = document.createElement('select');
+                targetSelect.className = 'fat-content-post-select';
+                targetWrap.appendChild(targetSelect);
+                panel.appendChild(targetWrap);
+
+                buildOptions(targetSelect, [], data.strings.choosePost || 'Choose a post', function (post) {
+                    return post.title || ('#' + post.id);
+                });
+
+                Promise.all([loadPostsForStatus('draft'), loadPostsForStatus('publish')]).then(function (result) {
+                    const draftPosts = result[0] || [];
+                    const publishPosts = result[1] || [];
+                    const merged = draftPosts.concat(
+                        publishPosts.filter(function (post) {
+                            return !draftPosts.some(function (draftPost) {
+                                return String(draftPost.id) === String(post.id);
+                            });
+                        })
+                    );
+                    targetSelect.innerHTML = '';
+                    buildOptions(targetSelect, merged, data.strings.choosePost || 'Choose a post', function (post) {
+                        return post.title || ('#' + post.id);
+                    });
+                    if (selectedTargetId) {
+                        targetSelect.value = selectedTargetId;
+                    }
+                }).catch(function () {
+                    // Keep fallback placeholder only.
+                });
+
+                targetSelect.addEventListener('change', function () {
+                    selectedTargetId = targetSelect.value || '';
+                    runState.targetId = selectedTargetId;
+                });
+            } else if (applyMeta.target_type === 'attachment') {
+                selectedTargetId = selectedTargetId || contentSourceState.selectedAttachmentId;
+            }
+
+            const list = document.createElement('div');
+            list.className = 'fat-apply-list';
+            mappings.forEach(function (mapping, index) {
+                const row = document.createElement('label');
+                row.className = 'fat-inline-check';
+
+                const input = document.createElement('input');
+                input.type = 'checkbox';
+                input.value = mapping.apply_key;
+                input.checked = index === 0;
+
+                row.appendChild(input);
+                row.appendChild(document.createTextNode(' ' + (mapping.label || mapping.output_key)));
+                list.appendChild(row);
+            });
+            panel.appendChild(list);
+
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'button button-secondary fat-apply-button';
+            button.textContent = data.strings.applySelected || 'Apply Selected Fields';
+            button.addEventListener('click', function () {
+                applyOutputs({
+                    applyMeta: applyMeta,
+                    outputs: outputs,
+                    panel: panel
+                });
+            });
+            panel.appendChild(button);
+
+            runState.targetType = applyMeta.target_type || '';
+            runState.targetId = selectedTargetId || '';
+
+            return panel;
         }
 
         function renderOutputs(tool, outputs, meta) {
@@ -409,10 +767,23 @@
 
                 outputsWrap.appendChild(card);
             });
+
+            const applyPanel = renderApplyPanel(outputs, (meta && meta.apply) ? meta.apply : null);
+            if (applyPanel) {
+                outputsWrap.appendChild(applyPanel);
+                const generateApplyButton = document.getElementById('fat-runner-generate-apply');
+                if (generateApplyButton) {
+                    generateApplyButton.hidden = false;
+                }
+            }
         }
 
-        async function runTool(event) {
-            event.preventDefault();
+        async function runTool(event, options) {
+            if (event && typeof event.preventDefault === 'function') {
+                event.preventDefault();
+            }
+
+            const config = options || {};
             const tool = selectedTool();
             const formData = new FormData(form);
             const inputs = {};
@@ -431,9 +802,22 @@
                 }
             }
 
+            if (contentSourceState.attachmentControls) {
+                inputs.__fat_attachment_id = contentSourceState.selectedAttachmentId || '';
+                if (!inputs.__fat_attachment_id) {
+                    setStatus(data.strings.mediaSelectionRequired || 'Please select an attachment.', 'error');
+                    return;
+                }
+            }
+
+            const generateApplyButton = document.getElementById('fat-runner-generate-apply');
             submit.disabled = true;
+            if (generateApplyButton) {
+                generateApplyButton.disabled = true;
+            }
             setStatus(data.strings.running || 'Running…', 'loading');
             outputsWrap.innerHTML = '';
+            resetRunState();
 
             try {
                 const response = await fetch(data.restUrl, {
@@ -455,12 +839,28 @@
                     throw new Error(message);
                 }
 
-                renderOutputs(tool, payload.data.outputs, payload.data.meta || {});
+                renderOutputs(tool, payload.data.outputs || {}, payload.data.meta || {});
+                runState.outputs = payload.data.outputs || {};
+                runState.applyMeta = payload.data.meta && payload.data.meta.apply ? payload.data.meta.apply : null;
                 setStatus('Completed.', 'success');
+
+                if (config.applyAfterGenerate && runState.applyMeta && runState.applyMeta.enabled) {
+                    const panel = outputsWrap.querySelector('.fat-apply-panel');
+                    if (panel) {
+                        await applyOutputs({
+                            applyMeta: runState.applyMeta,
+                            outputs: runState.outputs,
+                            panel: panel
+                        });
+                    }
+                }
             } catch (error) {
                 setStatus(error.message || data.strings.runError || 'The tool could not be run.', 'error');
             } finally {
                 submit.disabled = false;
+                if (generateApplyButton) {
+                    generateApplyButton.disabled = false;
+                }
             }
         }
 
