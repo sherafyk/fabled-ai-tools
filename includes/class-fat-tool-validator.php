@@ -12,11 +12,17 @@ class FAT_Tool_Validator {
         $apply  = FAT_Helpers::array_get( $config, 'apply', array() );
 
         $source_type = sanitize_key( FAT_Helpers::array_get( $source, 'type', '' ) );
+        if ( 'media' === $source_type ) {
+            $source_type = 'attachment';
+        }
         if ( ! in_array( $source_type, array( '', 'post', 'attachment' ), true ) ) {
             $source_type = '';
         }
 
         $apply_target = sanitize_key( FAT_Helpers::array_get( $apply, 'target', '' ) );
+        if ( 'media' === $apply_target ) {
+            $apply_target = 'attachment';
+        }
         if ( ! in_array( $apply_target, array( '', 'post', 'attachment' ), true ) ) {
             $apply_target = '';
         }
@@ -219,7 +225,6 @@ class FAT_Tool_Validator {
 
     protected function validate_wp_integration( $config, $output_keys ) {
         $errors         = array();
-        $allowed_fields = array( 'post_title', 'post_excerpt', 'post_content', 'alt_text' );
 
         if ( empty( $config ) ) {
             return array( 'errors' => array() );
@@ -229,16 +234,27 @@ class FAT_Tool_Validator {
         $apply  = (array) FAT_Helpers::array_get( $config, 'apply', array() );
 
         $source_type = sanitize_key( FAT_Helpers::array_get( $source, 'type', '' ) );
+        if ( 'media' === $source_type ) {
+            $source_type = 'attachment';
+        }
         if ( ! in_array( $source_type, array( '', 'post', 'attachment' ), true ) ) {
             $errors[] = __( 'WordPress integration source type must be post, attachment, or empty.', 'fabled-ai-tools' );
         }
 
         $target = sanitize_key( FAT_Helpers::array_get( $apply, 'target', '' ) );
+        if ( 'media' === $target ) {
+            $target = 'attachment';
+        }
         if ( ! in_array( $target, array( '', 'post', 'attachment' ), true ) ) {
             $errors[] = __( 'WordPress integration apply target must be post, attachment, or empty.', 'fabled-ai-tools' );
         }
 
+        $allowed_fields = 'post' === $target
+            ? array( 'post_title', 'post_excerpt', 'post_content' )
+            : array( 'post_title', 'post_excerpt', 'post_content', 'alt_text' );
         $seen_mappings = array();
+        $seen_output_keys = array();
+        $seen_wp_fields   = array();
         foreach ( (array) FAT_Helpers::array_get( $apply, 'mappings', array() ) as $mapping ) {
             $output_key = FAT_Helpers::sanitize_keyish( FAT_Helpers::array_get( $mapping, 'output_key', '' ) );
             $wp_field   = sanitize_key( FAT_Helpers::array_get( $mapping, 'wp_field', '' ) );
@@ -265,6 +281,16 @@ class FAT_Tool_Validator {
                 $errors[] = sprintf( __( 'Duplicate apply mapping: %s', 'fabled-ai-tools' ), $mapping_key );
             }
             $seen_mappings[] = $mapping_key;
+            if ( in_array( $output_key, $seen_output_keys, true ) ) {
+                /* translators: %s: output key */
+                $errors[] = sprintf( __( 'Each output key can only be mapped once: %s', 'fabled-ai-tools' ), $output_key );
+            }
+            if ( in_array( $wp_field, $seen_wp_fields, true ) ) {
+                /* translators: %s: WordPress field */
+                $errors[] = sprintf( __( 'Each WordPress field can only be mapped once: %s', 'fabled-ai-tools' ), $wp_field );
+            }
+            $seen_output_keys[] = $output_key;
+            $seen_wp_fields[]   = $wp_field;
 
             if ( 'attachment' !== $target && 'alt_text' === $wp_field ) {
                 $errors[] = __( 'alt_text mappings require apply target attachment.', 'fabled-ai-tools' );

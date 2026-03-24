@@ -434,6 +434,10 @@ class FAT_Admin {
         if ( empty( $tool['output_schema'] ) ) {
             $tool['output_schema'] = array( $this->default_output_row() );
         }
+        $wp_integration_form = $this->wp_integration_form_state( FAT_Helpers::array_get( $tool, 'wp_integration', array() ) );
+        if ( ! empty( $wp_integration_form['enabled'] ) && empty( $wp_integration_form['mappings'] ) ) {
+            $wp_integration_form['mappings'] = array( $this->default_wp_mapping_row() );
+        }
 
         $roles = wp_roles()->roles;
         ?>
@@ -588,11 +592,57 @@ class FAT_Admin {
                     </table>
                 </div>
 
+                <div class="fat-card">
+                    <h2><?php esc_html_e( 'WordPress Apply Integration', 'fabled-ai-tools' ); ?></h2>
+                    <table class="form-table" role="presentation">
+                        <tr>
+                            <th scope="row"><?php esc_html_e( 'Enable Integration', 'fabled-ai-tools' ); ?></th>
+                            <td>
+                                <label><input type="checkbox" name="wp_integration_enabled" value="1" <?php checked( ! empty( $wp_integration_form['enabled'] ) ); ?> /> <?php esc_html_e( 'Allow generated outputs to be applied to WordPress fields.', 'fabled-ai-tools' ); ?></label>
+                                <p class="description"><?php esc_html_e( 'Leave disabled to keep this tool in generate-only mode.', 'fabled-ai-tools' ); ?></p>
+                            </td>
+                        </tr>
+                        <tr>
+                            <th scope="row"><label for="fat-wp-target"><?php esc_html_e( 'Apply Target Type', 'fabled-ai-tools' ); ?></label></th>
+                            <td>
+                                <select id="fat-wp-target" name="wp_integration_apply_target">
+                                    <option value=""><?php esc_html_e( 'None', 'fabled-ai-tools' ); ?></option>
+                                    <option value="post" <?php selected( 'post', $wp_integration_form['apply_target'] ); ?>><?php esc_html_e( 'Post', 'fabled-ai-tools' ); ?></option>
+                                    <option value="media" <?php selected( 'media', $wp_integration_form['apply_target'] ); ?>><?php esc_html_e( 'Media', 'fabled-ai-tools' ); ?></option>
+                                </select>
+                                <p class="description"><?php esc_html_e( 'Post supports title/excerpt/content. Media supports title/alt text/caption/description.', 'fabled-ai-tools' ); ?></p>
+                            </td>
+                        </tr>
+                    </table>
+
+                    <div class="fat-header-row">
+                        <h3><?php esc_html_e( 'Output to WordPress Field Mappings', 'fabled-ai-tools' ); ?></h3>
+                        <button type="button" class="button fat-add-row" data-target="wp-mapping"><?php esc_html_e( 'Add Mapping', 'fabled-ai-tools' ); ?></button>
+                    </div>
+                    <table class="widefat striped fat-schema-table" id="fat-wp-mapping-table">
+                        <thead>
+                            <tr>
+                                <th><?php esc_html_e( 'Output Key', 'fabled-ai-tools' ); ?></th>
+                                <th><?php esc_html_e( 'WordPress Field', 'fabled-ai-tools' ); ?></th>
+                                <th><?php esc_html_e( 'Label', 'fabled-ai-tools' ); ?></th>
+                                <th></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php foreach ( array_values( (array) $wp_integration_form['mappings'] ) as $index => $mapping ) : ?>
+                                <?php $this->render_wp_mapping_row( $index, $mapping, $tool['output_schema'] ); ?>
+                            <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                    <p class="description"><?php esc_html_e( 'Map each output key once. Duplicate mappings or unsupported fields are rejected during save.', 'fabled-ai-tools' ); ?></p>
+                </div>
+
                 <?php submit_button( $tool_id ? __( 'Update Tool', 'fabled-ai-tools' ) : __( 'Create Tool', 'fabled-ai-tools' ) ); ?>
             </form>
 
             <script type="text/template" id="fat-input-row-template"><?php ob_start(); $this->render_input_schema_row( '__INDEX__', $this->default_input_row() ); echo trim( ob_get_clean() ); ?></script>
             <script type="text/template" id="fat-output-row-template"><?php ob_start(); $this->render_output_schema_row( '__INDEX__', $this->default_output_row() ); echo trim( ob_get_clean() ); ?></script>
+            <script type="text/template" id="fat-wp-mapping-row-template"><?php ob_start(); $this->render_wp_mapping_row( '__INDEX__', $this->default_wp_mapping_row(), $tool['output_schema'] ); echo trim( ob_get_clean() ); ?></script>
         </div>
         <?php
     }
@@ -871,9 +921,28 @@ class FAT_Admin {
     protected function build_tool_data_from_request() {
         $input_rows  = isset( $_POST['input_fields'] ) ? wp_unslash( $_POST['input_fields'] ) : array();
         $output_rows = isset( $_POST['output_fields'] ) ? wp_unslash( $_POST['output_fields'] ) : array();
-        $wp_integration_raw = FAT_Helpers::array_get( $_POST, 'wp_integration', array() );
-        if ( is_string( $wp_integration_raw ) ) {
-            $wp_integration_raw = FAT_Helpers::maybe_json_decode( wp_unslash( $wp_integration_raw ), array() );
+        $mapping_rows = isset( $_POST['wp_integration_mappings'] ) ? wp_unslash( $_POST['wp_integration_mappings'] ) : array();
+
+        $wp_integration_raw = array();
+        if ( ! empty( $_POST['wp_integration_enabled'] ) ) {
+            $target = sanitize_key( FAT_Helpers::array_get( $_POST, 'wp_integration_apply_target', '' ) );
+            if ( 'media' === $target ) {
+                $target = 'attachment';
+            }
+
+            $wp_integration_raw = array(
+                'source' => array(
+                    'type'             => '',
+                    'allow_manual'     => 1,
+                    'allow_draft'      => 1,
+                    'allow_publish'    => 1,
+                    'allow_attachment' => 0,
+                ),
+                'apply'  => array(
+                    'target'   => $target,
+                    'mappings' => is_array( $mapping_rows ) ? $mapping_rows : array(),
+                ),
+            );
         }
 
         return array(
@@ -896,6 +965,47 @@ class FAT_Admin {
             'log_outputs'          => ! empty( $_POST['log_outputs'] ) ? 1 : 0,
             'sort_order'           => intval( FAT_Helpers::array_get( $_POST, 'sort_order', 0 ) ),
         );
+    }
+
+    protected function render_wp_mapping_row( $index, $mapping, $output_schema ) {
+        $mapping     = wp_parse_args( $mapping, $this->default_wp_mapping_row() );
+        $output_keys = array();
+
+        foreach ( (array) $output_schema as $field ) {
+            $key = FAT_Helpers::sanitize_keyish( FAT_Helpers::array_get( $field, 'key', '' ) );
+            if ( '' !== $key ) {
+                $output_keys[ $key ] = FAT_Helpers::array_get( $field, 'label', $key );
+            }
+        }
+
+        $wp_field_options = array(
+            ''             => __( 'Select field', 'fabled-ai-tools' ),
+            'post_title'   => __( 'Title', 'fabled-ai-tools' ),
+            'post_excerpt' => __( 'Excerpt / Caption', 'fabled-ai-tools' ),
+            'post_content' => __( 'Content / Description', 'fabled-ai-tools' ),
+            'alt_text'     => __( 'Alt Text (media only)', 'fabled-ai-tools' ),
+        );
+        ?>
+        <tr>
+            <td>
+                <select name="wp_integration_mappings[<?php echo esc_attr( $index ); ?>][output_key]">
+                    <option value=""><?php esc_html_e( 'Select output key', 'fabled-ai-tools' ); ?></option>
+                    <?php foreach ( $output_keys as $key => $label ) : ?>
+                        <option value="<?php echo esc_attr( $key ); ?>" <?php selected( $key, FAT_Helpers::array_get( $mapping, 'output_key', '' ) ); ?>><?php echo esc_html( $key . ' — ' . $label ); ?></option>
+                    <?php endforeach; ?>
+                </select>
+            </td>
+            <td>
+                <select name="wp_integration_mappings[<?php echo esc_attr( $index ); ?>][wp_field]">
+                    <?php foreach ( $wp_field_options as $field_key => $field_label ) : ?>
+                        <option value="<?php echo esc_attr( $field_key ); ?>" <?php selected( $field_key, FAT_Helpers::array_get( $mapping, 'wp_field', '' ) ); ?>><?php echo esc_html( $field_label ); ?></option>
+                    <?php endforeach; ?>
+                </select>
+            </td>
+            <td><input type="text" name="wp_integration_mappings[<?php echo esc_attr( $index ); ?>][label]" value="<?php echo esc_attr( FAT_Helpers::array_get( $mapping, 'label', '' ) ); ?>" /></td>
+            <td><button type="button" class="button-link-delete fat-remove-row"><?php esc_html_e( 'Remove', 'fabled-ai-tools' ); ?></button></td>
+        </tr>
+        <?php
     }
 
     protected function render_input_schema_row( $index, $field ) {
@@ -986,6 +1096,29 @@ class FAT_Admin {
             'label'    => '',
             'type'     => 'text',
             'copyable' => 1,
+        );
+    }
+
+    protected function default_wp_mapping_row() {
+        return array(
+            'output_key' => '',
+            'wp_field'   => '',
+            'label'      => '',
+        );
+    }
+
+    protected function wp_integration_form_state( $config ) {
+        $config       = is_array( $config ) ? $config : array();
+        $apply        = (array) FAT_Helpers::array_get( $config, 'apply', array() );
+        $apply_target = sanitize_key( FAT_Helpers::array_get( $apply, 'target', '' ) );
+        if ( 'attachment' === $apply_target ) {
+            $apply_target = 'media';
+        }
+
+        return array(
+            'enabled'      => ! empty( $config ),
+            'apply_target' => $apply_target,
+            'mappings'     => (array) FAT_Helpers::array_get( $apply, 'mappings', array() ),
         );
     }
 

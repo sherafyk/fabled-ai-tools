@@ -27,23 +27,43 @@
     function initSchemaBuilder() {
         const inputBody = document.querySelector('#fat-input-schema-table tbody');
         const outputBody = document.querySelector('#fat-output-schema-table tbody');
+        const wpMappingBody = document.querySelector('#fat-wp-mapping-table tbody');
+        const schemaTargets = {
+            input: {
+                body: inputBody,
+                templateId: 'fat-input-row-template'
+            },
+            output: {
+                body: outputBody,
+                templateId: 'fat-output-row-template'
+            },
+            'wp-mapping': {
+                body: wpMappingBody,
+                templateId: 'fat-wp-mapping-row-template'
+            }
+        };
 
-        if (!inputBody && !outputBody) {
+        if (!inputBody && !outputBody && !wpMappingBody) {
             return;
         }
 
-        if (inputBody) {
-            inputBody.dataset.nextIndex = String(inputBody.querySelectorAll('tr').length);
-        }
-        if (outputBody) {
-            outputBody.dataset.nextIndex = String(outputBody.querySelectorAll('tr').length);
-        }
+        Object.keys(schemaTargets).forEach(function (target) {
+            const body = schemaTargets[target].body;
+            if (body) {
+                body.dataset.nextIndex = String(body.querySelectorAll('tr').length);
+            }
+        });
 
         document.querySelectorAll('.fat-add-row').forEach(function (button) {
             button.addEventListener('click', function () {
                 const target = button.getAttribute('data-target');
-                const body = target === 'input' ? inputBody : outputBody;
-                const template = document.getElementById(target === 'input' ? 'fat-input-row-template' : 'fat-output-row-template');
+                const config = schemaTargets[target];
+                if (!config) {
+                    return;
+                }
+
+                const body = config.body;
+                const template = document.getElementById(config.templateId);
                 if (!body || !template) {
                     return;
                 }
