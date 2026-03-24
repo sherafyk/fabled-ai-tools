@@ -75,6 +75,7 @@ class FAT_Activator {
             user_prompt_template longtext NULL,
             input_schema longtext NULL,
             output_schema longtext NULL,
+            wp_integration longtext NULL,
             max_input_chars int(10) unsigned NOT NULL DEFAULT 20000,
             max_output_tokens int(10) unsigned NOT NULL DEFAULT 700,
             daily_run_limit int(10) unsigned NOT NULL DEFAULT 0,

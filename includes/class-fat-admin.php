@@ -28,6 +28,7 @@ class FAT_Admin {
         add_action( 'admin_post_fat_save_tool', array( $this, 'handle_save_tool' ) );
         add_action( 'admin_post_fat_tool_action', array( $this, 'handle_tool_action' ) );
         add_action( 'wp_ajax_fat_runner_posts', array( $this, 'handle_runner_posts_lookup' ) );
+        add_action( 'wp_ajax_fat_runner_attachments', array( $this, 'handle_runner_attachments_lookup' ) );
     }
 
     public function register_menus() {
@@ -822,9 +823,58 @@ class FAT_Admin {
         );
     }
 
+    public function handle_runner_attachments_lookup() {
+        if ( ! $this->current_user_can_run_tools() ) {
+            wp_send_json_error(
+                array(
+                    'message' => __( 'You are not allowed to load attachments.', 'fabled-ai-tools' ),
+                ),
+                403
+            );
+        }
+
+        check_ajax_referer( 'fat_runner_posts', 'nonce' );
+
+        $query = new WP_Query(
+            array(
+                'post_type'              => 'attachment',
+                'post_status'            => 'inherit',
+                'post_mime_type'         => 'image',
+                'posts_per_page'         => 40,
+                'orderby'                => 'modified',
+                'order'                  => 'DESC',
+                'no_found_rows'          => true,
+                'update_post_meta_cache' => false,
+                'update_post_term_cache' => false,
+                'fields'                 => 'ids',
+            )
+        );
+
+        $attachments = array();
+        foreach ( $query->posts as $attachment_id ) {
+            $attachment_id  = (int) $attachment_id;
+            $attached_file  = get_attached_file( $attachment_id );
+            $attachments[] = array(
+                'id'       => $attachment_id,
+                'title'    => html_entity_decode( get_the_title( $attachment_id ), ENT_QUOTES, get_bloginfo( 'charset' ) ),
+                'filename' => $attached_file ? wp_basename( $attached_file ) : '',
+            );
+        }
+
+        wp_send_json_success(
+            array(
+                'attachments' => $attachments,
+            )
+        );
+    }
+
     protected function build_tool_data_from_request() {
         $input_rows  = isset( $_POST['input_fields'] ) ? wp_unslash( $_POST['input_fields'] ) : array();
         $output_rows = isset( $_POST['output_fields'] ) ? wp_unslash( $_POST['output_fields'] ) : array();
+        $wp_integration_raw = FAT_Helpers::array_get( $_POST, 'wp_integration', array() );
+        if ( is_string( $wp_integration_raw ) ) {
+            $wp_integration_raw = FAT_Helpers::maybe_json_decode( wp_unslash( $wp_integration_raw ), array() );
+        }
 
         return array(
             'name'                 => sanitize_text_field( FAT_Helpers::array_get( $_POST, 'name', '' ) ),
@@ -838,6 +888,7 @@ class FAT_Admin {
             'user_prompt_template' => FAT_Helpers::sanitize_textarea_preserve_newlines( FAT_Helpers::array_get( $_POST, 'user_prompt_template', '' ) ),
             'input_schema'         => $this->validator->normalize_input_schema( $input_rows ),
             'output_schema'        => $this->validator->normalize_output_schema( $output_rows ),
+            'wp_integration'       => $this->validator->normalize_wp_integration( $wp_integration_raw ),
             'max_input_chars'      => max( 1, absint( FAT_Helpers::array_get( $_POST, 'max_input_chars', 20000 ) ) ),
             'max_output_tokens'    => max( 1, absint( FAT_Helpers::array_get( $_POST, 'max_output_tokens', 700 ) ) ),
             'daily_run_limit'      => max( 0, absint( FAT_Helpers::array_get( $_POST, 'daily_run_limit', 0 ) ) ),
@@ -907,6 +958,7 @@ class FAT_Admin {
             'user_prompt_template' => '',
             'input_schema'         => array(),
             'output_schema'        => array(),
+            'wp_integration'       => array(),
             'max_input_chars'      => 20000,
             'max_output_tokens'    => 700,
             'daily_run_limit'      => 0,

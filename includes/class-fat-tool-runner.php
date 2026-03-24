@@ -96,7 +96,7 @@ class FAT_Tool_Runner {
             return new WP_Error( 'fat_tool_forbidden', __( 'You are not allowed to run this tool.', 'fabled-ai-tools' ), array( 'status' => 403 ) );
         }
 
-        $resolved_inputs = $this->resolve_inputs_from_selected_post( $tool, $raw_inputs );
+        $resolved_inputs = $this->resolve_contextual_inputs( $tool, $raw_inputs );
         if ( is_wp_error( $resolved_inputs ) ) {
             return $resolved_inputs;
         }
@@ -223,7 +223,114 @@ class FAT_Tool_Runner {
                 'model'      => FAT_Helpers::array_get( $response, 'model', $model ),
                 'latency_ms' => $latency_ms,
                 'usage'      => FAT_Helpers::array_get( $response, 'usage', array() ),
+                'apply'      => $this->build_apply_runtime_meta( $tool, $raw_inputs, array_keys( $outputs ) ),
             ),
+        );
+    }
+
+    public function apply_generated_outputs( $tool_id, $target_type, $target_id, $outputs, $apply_fields, $user = null ) {
+        $user        = $this->normalize_user( $user );
+        $tool_id     = absint( $tool_id );
+        $target_id   = absint( $target_id );
+        $target_type = sanitize_key( $target_type );
+        $tool        = $this->tools_repo->get_by_id( $tool_id );
+
+        if ( ! $tool ) {
+            return new WP_Error( 'fat_tool_not_found', __( 'Tool not found.', 'fabled-ai-tools' ), array( 'status' => 404 ) );
+        }
+
+        if ( ! $this->user_can_access_tool( $tool, $user ) ) {
+            return new WP_Error( 'fat_tool_forbidden', __( 'You are not allowed to apply outputs for this tool.', 'fabled-ai-tools' ), array( 'status' => 403 ) );
+        }
+
+        if ( ! in_array( $target_type, array( 'post', 'attachment' ), true ) || $target_id <= 0 ) {
+            return new WP_Error( 'fat_invalid_target', __( 'A valid apply target is required.', 'fabled-ai-tools' ), array( 'status' => 400 ) );
+        }
+
+        $apply_fields = array_values(
+            array_unique(
+                array_filter(
+                    array_map( 'sanitize_key', (array) $apply_fields )
+                )
+            )
+        );
+
+        if ( empty( $apply_fields ) ) {
+            return new WP_Error( 'fat_no_apply_fields', __( 'Select at least one field to apply.', 'fabled-ai-tools' ), array( 'status' => 400 ) );
+        }
+
+        $mappings = $this->get_allowed_apply_mappings( $tool, $target_type );
+        if ( empty( $mappings ) ) {
+            return new WP_Error( 'fat_apply_not_configured', __( 'This tool has no apply mappings for the selected target type.', 'fabled-ai-tools' ), array( 'status' => 400 ) );
+        }
+
+        $selected_mappings = array();
+        foreach ( $apply_fields as $field_key ) {
+            if ( ! isset( $mappings[ $field_key ] ) ) {
+                return new WP_Error( 'fat_invalid_apply_field', __( 'An unsupported field was requested for apply.', 'fabled-ai-tools' ), array( 'status' => 400 ) );
+            }
+            $selected_mappings[ $field_key ] = $mappings[ $field_key ];
+        }
+
+        $target_post = get_post( $target_id );
+        if ( ! $target_post ) {
+            return new WP_Error( 'fat_target_not_found', __( 'Target content could not be found.', 'fabled-ai-tools' ), array( 'status' => 404 ) );
+        }
+
+        if ( 'post' === $target_type && 'post' !== $target_post->post_type ) {
+            return new WP_Error( 'fat_target_type_mismatch', __( 'Target is not a post.', 'fabled-ai-tools' ), array( 'status' => 400 ) );
+        }
+
+        if ( 'attachment' === $target_type && 'attachment' !== $target_post->post_type ) {
+            return new WP_Error( 'fat_target_type_mismatch', __( 'Target is not an attachment.', 'fabled-ai-tools' ), array( 'status' => 400 ) );
+        }
+
+        if ( ! current_user_can( 'edit_post', $target_id ) ) {
+            return new WP_Error( 'fat_target_forbidden', __( 'You are not allowed to edit this target.', 'fabled-ai-tools' ), array( 'status' => 403 ) );
+        }
+
+        $update_post_data = array(
+            'ID' => $target_id,
+        );
+        $updated_fields   = array();
+
+        foreach ( $selected_mappings as $apply_key => $mapping ) {
+            $output_key = FAT_Helpers::array_get( $mapping, 'output_key', '' );
+            $wp_field   = FAT_Helpers::array_get( $mapping, 'wp_field', '' );
+
+            if ( '' === $output_key || ! array_key_exists( $output_key, $outputs ) ) {
+                return new WP_Error( 'fat_missing_output_value', __( 'Missing generated output for one of the selected apply fields.', 'fabled-ai-tools' ), array( 'status' => 400 ) );
+            }
+
+            $value = $outputs[ $output_key ];
+            if ( is_array( $value ) || is_object( $value ) ) {
+                return new WP_Error( 'fat_invalid_output_value', __( 'Generated output values must be plain strings.', 'fabled-ai-tools' ), array( 'status' => 400 ) );
+            }
+
+            $value = trim( wp_kses( (string) $value, array() ) );
+
+            if ( 'alt_text' === $wp_field ) {
+                update_post_meta( $target_id, '_wp_attachment_image_alt', $value );
+                $updated_fields[] = $apply_key;
+                continue;
+            }
+
+            $update_post_data[ $wp_field ] = $value;
+            $updated_fields[]              = $apply_key;
+        }
+
+        if ( count( $update_post_data ) > 1 ) {
+            $updated_post_id = wp_update_post( wp_slash( $update_post_data ), true );
+            if ( is_wp_error( $updated_post_id ) ) {
+                return new WP_Error( 'fat_apply_failed', $updated_post_id->get_error_message(), array( 'status' => 500 ) );
+            }
+        }
+
+        return array(
+            'tool_id'        => $tool_id,
+            'target_type'    => $target_type,
+            'target_id'      => $target_id,
+            'updated_fields' => array_values( array_unique( $updated_fields ) ),
         );
     }
 
@@ -261,6 +368,22 @@ class FAT_Tool_Runner {
         }
 
         return wp_get_current_user();
+    }
+
+    protected function resolve_contextual_inputs( $tool, $raw_inputs ) {
+        $inputs = is_array( $raw_inputs ) ? $raw_inputs : array();
+
+        $inputs = $this->resolve_inputs_from_selected_post( $tool, $inputs );
+        if ( is_wp_error( $inputs ) ) {
+            return $inputs;
+        }
+
+        $inputs = $this->resolve_inputs_from_selected_attachment( $tool, $inputs );
+        if ( is_wp_error( $inputs ) ) {
+            return $inputs;
+        }
+
+        return $inputs;
     }
 
     protected function resolve_inputs_from_selected_post( $tool, $raw_inputs ) {
@@ -306,6 +429,55 @@ class FAT_Tool_Runner {
         return $inputs;
     }
 
+    protected function resolve_inputs_from_selected_attachment( $tool, $raw_inputs ) {
+        $inputs = is_array( $raw_inputs ) ? $raw_inputs : array();
+
+        $attachment_id = absint( FAT_Helpers::array_get( $inputs, '__fat_attachment_id', 0 ) );
+        if ( $attachment_id <= 0 ) {
+            return $inputs;
+        }
+
+        $attachment = get_post( $attachment_id );
+        if ( ! $attachment || 'attachment' !== $attachment->post_type ) {
+            return new WP_Error( 'fat_invalid_inputs', __( 'Selected attachment could not be found.', 'fabled-ai-tools' ), array( 'status' => 400 ) );
+        }
+
+        if ( ! current_user_can( 'edit_post', $attachment_id ) ) {
+            return new WP_Error( 'fat_invalid_inputs', __( 'You are not allowed to use the selected attachment.', 'fabled-ai-tools' ), array( 'status' => 403 ) );
+        }
+
+        $attached_file = get_attached_file( $attachment_id );
+        $file_url      = wp_get_attachment_url( $attachment_id );
+        $parent_title  = '';
+
+        if ( ! empty( $attachment->post_parent ) ) {
+            $parent_post = get_post( (int) $attachment->post_parent );
+            if ( $parent_post ) {
+                $parent_title = html_entity_decode( get_the_title( $parent_post ), ENT_QUOTES, get_bloginfo( 'charset' ) );
+            }
+        }
+
+        $context_values = array(
+            'attachment_id'          => (string) $attachment_id,
+            'attachment_title'       => html_entity_decode( get_the_title( $attachment ), ENT_QUOTES, get_bloginfo( 'charset' ) ),
+            'attachment_caption'     => (string) $attachment->post_excerpt,
+            'attachment_description' => (string) $attachment->post_content,
+            'attachment_alt_text'    => (string) get_post_meta( $attachment_id, '_wp_attachment_image_alt', true ),
+            'attachment_url'         => $file_url ? (string) $file_url : '',
+            'attachment_filename'    => $attached_file ? wp_basename( $attached_file ) : '',
+            'attachment_mime_type'   => (string) get_post_mime_type( $attachment ),
+            'attachment_parent_title'=> $parent_title,
+        );
+
+        foreach ( $context_values as $key => $value ) {
+            if ( $this->tool_has_input_key( $tool, $key ) ) {
+                $inputs[ $key ] = $value;
+            }
+        }
+
+        return $inputs;
+    }
+
     protected function normalize_post_content_for_article_body( $content ) {
         $content = (string) $content;
         $content = strip_shortcodes( $content );
@@ -324,5 +496,77 @@ class FAT_Tool_Runner {
         }
 
         return false;
+    }
+
+    protected function build_apply_runtime_meta( $tool, $raw_inputs, $output_keys ) {
+        $wp_integration = (array) FAT_Helpers::array_get( $tool, 'wp_integration', array() );
+        $target_type    = sanitize_key( FAT_Helpers::array_get( FAT_Helpers::array_get( $wp_integration, 'apply', array() ), 'target', '' ) );
+
+        if ( '' === $target_type ) {
+            return array(
+                'enabled' => false,
+            );
+        }
+
+        $target_id = 0;
+        if ( 'post' === $target_type ) {
+            $target_id = absint( FAT_Helpers::array_get( $raw_inputs, '__fat_article_post_id', 0 ) );
+        } elseif ( 'attachment' === $target_type ) {
+            $target_id = absint( FAT_Helpers::array_get( $raw_inputs, '__fat_attachment_id', 0 ) );
+        }
+
+        $allowed_mappings = array_values( $this->get_allowed_apply_mappings( $tool, $target_type ) );
+
+        return array(
+            'enabled'      => ! empty( $allowed_mappings ),
+            'target_type'  => $target_type,
+            'target_id'    => $target_id,
+            'mappings'     => $allowed_mappings,
+            'output_keys'  => array_values( array_map( 'sanitize_key', (array) $output_keys ) ),
+        );
+    }
+
+    protected function get_allowed_apply_mappings( $tool, $target_type ) {
+        $allowed_fields = array(
+            'post'       => array( 'post_title', 'post_excerpt', 'post_content' ),
+            'attachment' => array( 'post_title', 'post_excerpt', 'post_content', 'alt_text' ),
+        );
+        $target_type    = sanitize_key( $target_type );
+        $tool_outputs   = array();
+
+        foreach ( (array) FAT_Helpers::array_get( $tool, 'output_schema', array() ) as $field ) {
+            $tool_outputs[] = FAT_Helpers::sanitize_keyish( FAT_Helpers::array_get( $field, 'key', '' ) );
+        }
+
+        $mappings = array();
+        $apply    = (array) FAT_Helpers::array_get( FAT_Helpers::array_get( $tool, 'wp_integration', array() ), 'apply', array() );
+        if ( $target_type !== sanitize_key( FAT_Helpers::array_get( $apply, 'target', '' ) ) ) {
+            return $mappings;
+        }
+
+        foreach ( (array) FAT_Helpers::array_get( $apply, 'mappings', array() ) as $mapping ) {
+            $output_key = FAT_Helpers::sanitize_keyish( FAT_Helpers::array_get( $mapping, 'output_key', '' ) );
+            $wp_field   = sanitize_key( FAT_Helpers::array_get( $mapping, 'wp_field', '' ) );
+
+            if ( '' === $output_key || '' === $wp_field ) {
+                continue;
+            }
+            if ( ! isset( $allowed_fields[ $target_type ] ) || ! in_array( $wp_field, $allowed_fields[ $target_type ], true ) ) {
+                continue;
+            }
+            if ( ! in_array( $output_key, $tool_outputs, true ) ) {
+                continue;
+            }
+
+            $apply_key = $output_key . ':' . $wp_field;
+            $mappings[ $apply_key ] = array(
+                'apply_key'   => $apply_key,
+                'output_key'  => $output_key,
+                'wp_field'    => $wp_field,
+                'label'       => sanitize_text_field( FAT_Helpers::array_get( $mapping, 'label', $output_key ) ),
+            );
+        }
+
+        return $mappings;
     }
 }

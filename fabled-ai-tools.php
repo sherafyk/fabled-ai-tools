@@ -3,7 +3,7 @@
  * Plugin Name: Fabled AI Tools
  * Plugin URI: https://example.com/
  * Description: Modular admin-managed AI tools for WordPress using server-side OpenAI Responses API calls.
- * Version: 1.0.0
+ * Version: 1.1.0
  * Author: OpenAI
  * Text Domain: fabled-ai-tools
  */
@@ -12,11 +12,11 @@ if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
-define( 'FAT_VERSION', '1.0.0' );
+define( 'FAT_VERSION', '1.1.0' );
 define( 'FAT_PLUGIN_FILE', __FILE__ );
 define( 'FAT_PLUGIN_DIR', plugin_dir_path( __FILE__ ) );
 define( 'FAT_PLUGIN_URL', plugin_dir_url( __FILE__ ) );
-define( 'FAT_DB_VERSION', '1.0.0' );
+define( 'FAT_DB_VERSION', '1.1.0' );
 
 require_once FAT_PLUGIN_DIR . 'includes/class-fat-helpers.php';
 require_once FAT_PLUGIN_DIR . 'includes/class-fat-settings.php';
