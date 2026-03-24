@@ -259,6 +259,16 @@ class FAT_Tool_Runner {
             return new WP_Error( 'fat_no_apply_fields', __( 'Select at least one field to apply.', 'fabled-ai-tools' ), array( 'status' => 400 ) );
         }
 
+        error_log(
+            sprintf(
+                'FAT APPLY: incoming target_type=%1$s target_id=%2$d apply_fields=%3$s outputs=%4$s',
+                $target_type,
+                $target_id,
+                wp_json_encode( $apply_fields ),
+                wp_json_encode( is_array( $outputs ) ? $outputs : array() )
+            )
+        );
+
         $mappings = $this->get_allowed_apply_mappings( $tool, $target_type );
         if ( empty( $mappings ) ) {
             return new WP_Error( 'fat_apply_not_configured', __( 'This tool has no apply mappings for the selected target type.', 'fabled-ai-tools' ), array( 'status' => 400 ) );
@@ -312,6 +322,7 @@ class FAT_Tool_Runner {
             if ( 'alt_text' === $wp_field ) {
                 update_post_meta( $target_id, '_wp_attachment_image_alt', $value );
                 $updated_fields[] = $apply_key;
+                error_log( sprintf( 'FAT APPLY: updated attachment alt_text target_id=%d', $target_id ) );
                 continue;
             }
 
@@ -319,11 +330,31 @@ class FAT_Tool_Runner {
             $updated_fields[]              = $apply_key;
         }
 
+        error_log( 'FAT APPLY: mapped wp_update_post payload=' . wp_json_encode( $update_post_data ) );
+
         if ( count( $update_post_data ) > 1 ) {
             $updated_post_id = wp_update_post( wp_slash( $update_post_data ), true );
+            error_log(
+                sprintf(
+                    'FAT APPLY: wp_update_post result=%1$s is_wp_error=%2$s',
+                    is_wp_error( $updated_post_id ) ? $updated_post_id->get_error_message() : (string) $updated_post_id,
+                    is_wp_error( $updated_post_id ) ? 'yes' : 'no'
+                )
+            );
             if ( is_wp_error( $updated_post_id ) ) {
                 return new WP_Error( 'fat_apply_failed', $updated_post_id->get_error_message(), array( 'status' => 500 ) );
             }
+        }
+
+        $refreshed_post = get_post( $target_id );
+        if ( $refreshed_post ) {
+            error_log(
+                sprintf(
+                    'FAT APPLY: refreshed target_id=%1$d post_excerpt=%2$s',
+                    $target_id,
+                    wp_json_encode( (string) $refreshed_post->post_excerpt )
+                )
+            );
         }
 
         return array(
