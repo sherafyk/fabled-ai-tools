@@ -1,571 +1,584 @@
 # AGENTS.md
+## Fabled AI Tools — Image Workflow Implementation Guide for Codex
 
-## Purpose
-This repository contains a WordPress plugin: **Fabled AI Tools**.
+This file replaces the previous `AGENTS.md`.
 
-Your job is to implement the **next practical layer** of the plugin so generated outputs can optionally be **applied back into WordPress content**.
+Its purpose is to guide Codex in implementing the next phase of this plugin, focused specifically on **image workflows** inside the WordPress plugin.
 
-This work must support two closely related workflows:
+The implementation target is **not** a generic brainstorming exercise.  
+It is a practical implementation roadmap for this codebase.
 
-1. **Post / draft update workflow**
-   - A user runs a tool against pasted content or a selected WordPress post.
-   - After generation, the user can optionally apply selected outputs back to the chosen post or draft.
-   - Immediate example: generate an SEO excerpt, then apply it to `post_excerpt`.
+This document is intentionally focused on these built-in tools:
 
-2. **Media metadata workflow**
-   - A user selects an attachment from the Media Library.
-   - The tool generates fields such as **title**, **alt text**, **caption**, and **description**.
-   - The user can choose which generated fields to apply back to the attachment.
+1. **Featured Image Generator**
+   - user enters a prompt
+   - plugin generates an image with OpenAI
+   - plugin saves it to WordPress media library
+   - plugin generates metadata
+   - plugin creates a cropped derivative
+   - user can apply it as featured image to a post
 
-Do **not** redesign the plugin.
-Do **not** convert this into React.
-Do **not** add external dependencies.
-Keep the implementation **WordPress-native, minimal, and backward-compatible**.
+2. **Uploaded Image Processor**
+   - user uploads an image
+   - plugin crops/resizes it to a default featured-image size
+   - plugin converts it to WebP
+   - plugin saves it to WordPress media library
+   - plugin generates metadata
+   - user can apply it as featured image to a post
 
----
-
-## Product Goal
-Extend the plugin from **generate-only** into **generate + optional apply**.
-
-The safest and most maintainable UX for this codebase is:
-
-1. user selects source content or media
-2. tool runs and returns outputs
-3. plugin shows an **Apply to WordPress** panel
-4. user explicitly checks which fields to update
-5. plugin updates the selected post or attachment server-side
-
-Do **not** auto-save generated outputs immediately after generation.
-Require an explicit apply step.
-
-This keeps the current runner model intact and adds a controlled editorial workflow.
+This file is written as direct implementation guidance for Codex.
 
 ---
 
-## Recommended Strategy
-Use a **two-step apply flow** instead of trying to update WordPress during the initial run request.
+# Core Product Goals
 
-### Why this is the right fit
-- It matches the current architecture: the plugin already has a clear **runner request** and **rendered outputs** flow.
-- It avoids accidental content overwrites.
-- It keeps generation logging separate from content mutation.
-- It works for both posts and attachments.
-- It is flexible enough for future tools without requiring a large rewrite.
+The plugin should support two image-centered workflows:
 
-### Chosen implementation shape
-Add **small optional WordPress integration config** to each tool so the admin can define:
+## A. AI-generated featured image workflow
+The user enters a prompt and the plugin:
 
-- whether the tool can source content from a **post** or **attachment**
-- whether the tool can apply outputs to a **post** or **attachment**
-- which output keys map to which WordPress fields
+1. generates an image
+2. saves it to the media library
+3. generates title, alt text, and description
+4. creates a normalized derivative suitable for featured-image use
+5. optionally applies it as the featured image to a selected post
 
-Use a single new JSON field on the tool record for this configuration rather than hardcoding behavior based only on output keys.
+## B. Uploaded image processing workflow
+The user uploads an image and the plugin:
 
----
-
-## Constraints
-- Keep this a **WordPress plugin-first** implementation.
-- Use the existing plugin structure and coding style.
-- No external packages.
-- No build step.
-- No public/front-end UI.
-- No Gutenberg integration.
-- No React/Vue/SPA rewrite.
-- No broad architectural refactor.
-- Preserve existing generate-only behavior when no WordPress integration is configured.
-- Prefer explicit mappings over magic inference.
-- Require user confirmation before updating posts or attachments.
-
-A **small database schema change is allowed** for tool configuration because this feature needs structured per-tool mapping rules and should not be hardcoded per slug.
+1. validates the upload
+2. crops/resizes it to the standard featured-image format
+3. converts it to WebP
+4. saves it to the media library
+5. generates title, alt text, and description
+6. optionally applies it as the featured image to a selected post
 
 ---
 
-## Existing Plugin Areas
-These files are the core implementation surface and should be used instead of inventing new architecture:
+# Non-goals
 
-- `includes/class-fat-activator.php`
-- `includes/class-fat-tools-repository.php`
-- `includes/class-fat-tool-validator.php`
-- `includes/class-fat-admin.php`
-- `includes/class-fat-rest-controller.php`
-- `includes/class-fat-tool-runner.php`
-- `includes/class-fat-openai-client.php`
-- `includes/class-fat-helpers.php`
-- `assets/admin.js`
-- `assets/admin.css` (only if needed)
+Codex should **not** do the following unless explicitly required:
 
-Current relevant behavior already exists:
-- the runner page is rendered in `class-fat-admin.php`
-- tools are sent to the runner via `public_tool_definition()`
-- tool execution happens through the REST route in `class-fat-rest-controller.php`
-- the runner already supports **post-based article body sourcing**
-- outputs are already rendered client-side in `assets/admin.js`
-- the plugin already stores tool definitions in the custom `fat_tools` table
-
-Build on these patterns.
+- refactor the entire plugin architecture
+- rewrite all tools into a new generic framework
+- replace existing text tool behavior
+- remove or change current built-in text tools unless necessary for compatibility
+- invent a second unrelated logging system if an existing one already works
+- implement an elaborate asset-management subsystem
+- depend on server-to-self HTTP requests when direct WordPress functions can be used
+- auto-apply media to posts without explicit user action
 
 ---
 
-## Best Implementation Approach
+# Expected Architectural Direction
 
-### 1. Keep generation and apply separate
-Do not combine “run tool” and “save to WordPress” into one request.
+Use the simplest maintainable architecture that fits the current plugin.
 
-Instead:
-- `/run` generates outputs
-- `/apply` applies selected outputs to WordPress
+## High-level recommendation
+Treat image workflows as **dedicated built-in executors**, separate from the existing text-tool execution path.
 
-This is safer, easier to debug, and much easier to make optional.
+That means:
 
-### 2. Add per-tool WordPress integration config
-Add one new JSON field to the tools table, for example:
-- `wp_integration`
+- existing text tools remain unchanged
+- image-generation workflow gets its own execution path
+- uploaded-image processing workflow gets its own execution path
+- metadata generation can reuse shared internal helpers if appropriate
+- featured-image assignment should use a shared apply/helper layer if both tools need it
 
-Store structured config such as:
-- source mode support
-- apply target type
-- output-to-WP-field mappings
+## Why
+These workflows are materially different from text-only tools.
 
-Example shape:
+They involve:
 
-```json
-{
-  "source": {
-    "type": "post",
-    "allow_manual": true,
-    "allow_draft": true,
-    "allow_publish": true,
-    "allow_attachment": false
-  },
-  "apply": {
-    "target": "post",
-    "mappings": [
-      { "output_key": "excerpt", "wp_field": "post_excerpt", "label": "Post Excerpt" }
-    ]
-  }
-}
-```
+- media upload/generation
+- media library insertion
+- image processing
+- metadata generation from an image
+- featured-image assignment to a post
 
-For media metadata:
-
-```json
-{
-  "source": {
-    "type": "attachment",
-    "allow_manual": false,
-    "allow_attachment": true
-  },
-  "apply": {
-    "target": "attachment",
-    "mappings": [
-      { "output_key": "title", "wp_field": "post_title", "label": "Media Title" },
-      { "output_key": "alt_text", "wp_field": "alt_text", "label": "Alt Text" },
-      { "output_key": "caption", "wp_field": "post_excerpt", "label": "Caption" },
-      { "output_key": "description", "wp_field": "post_content", "label": "Description" }
-    ]
-  }
-}
-```
-
-Keep the structure simple. Do not attempt arbitrary nested workflow configuration.
-
-### 3. Add a dedicated apply endpoint
-Add a new authenticated REST route for applying generated outputs:
-- `POST /fabled-ai-tools/v1/apply`
-
-This endpoint should:
-- validate the current user can run the tool
-- validate the selected target entity belongs to an allowed type
-- validate the requested output keys are allowed by the tool’s mapping config
-- update only the requested checked fields
-- return a success response with the updated field list
-
-### 4. For media metadata tools, prefer actual attachment context
-For attachment-based tools:
-- resolve the attachment server-side
-- include attachment title, caption, description, alt text, filename, mime type, and URL in the tool inputs
-- when possible, also include the image itself as an image input to the OpenAI Responses request for better metadata generation quality
-
-If image input support is added, keep it **optional and tool-driven**.
-Do not break existing text-only tools.
-
-### 5. Do not hardcode behavior to specific tool slugs
-Avoid special cases like:
-- `if slug === 'seo-excerpt'`
-- `if output key === 'excerpt'`
-
-Use tool configuration and output mappings instead.
+Trying to force these into the same contract as excerpt/prompt tools will likely make the plugin harder to maintain.
 
 ---
 
-## Required Behavior
+# Canonical Concepts
 
-### A. Post / Draft update workflow
-For tools configured with post sourcing and post apply mappings:
+Codex should standardize around the following concepts.
 
-#### Runner UX
-- continue supporting:
-  - Paste Content
-  - Select Draft
-  - Select Published Post
-- if the tool supports post apply mappings, and a post is selected, show an **Apply to Post** section after generation
-- show one checkbox per allowed mapping
-- example: generated `excerpt` can map to `post_excerpt`
-- include an **Apply Selected Fields** button
+## 1. Canonical post target fields
+If this plugin exposes “apply” behavior for posts, it should use canonical target field names such as:
 
-#### Apply rules
-- never apply automatically just because generation succeeded
-- only apply fields the user explicitly checked
-- only update fields configured in the tool’s mapping config
-- if the source is a selected post, default the apply target to that same post
-- if the source is plain text and the tool supports post apply, allow selecting a target draft/post before applying
+- `featured_image`
+- `excerpt`
+- `title`
+- `content`
 
-#### Supported post fields in v1
-Keep the allowed post update surface intentionally small:
-- `post_title`
-- `post_excerpt`
-- `post_content`
-- optionally selected post meta keys later, but **do not** implement arbitrary meta writes in v1 unless absolutely necessary
+Do not expose raw internal WP field names in the UI or request contract unless there is a strong reason.
 
-For this task, prioritize:
-- `post_excerpt`
-- `post_title`
+## 2. Canonical attachment metadata fields
+For attachment metadata, use canonical internal names:
 
-### B. Media metadata workflow
-For tools configured with attachment sourcing and attachment apply mappings:
-
-#### Runner UX
-- show a media source selector only for tools configured for attachments
-- load a simple attachment dropdown via authenticated admin AJAX
-- once an attachment is selected, run the tool and display outputs
-- after generation, show an **Apply to Media** section with one checkbox per allowed mapping
-
-#### Supported attachment fields in v1
-Allow only these explicit mappings:
-- `post_title` => media title
-- `alt_text` => `_wp_attachment_image_alt`
-- `post_excerpt` => caption
-- `post_content` => description
-
-Do not support arbitrary attachment meta writes in v1.
-
-#### Attachment generation context
-Before generation, resolve the selected attachment server-side and provide these effective inputs when relevant:
-- attachment ID
-- title
-- caption
-- description
-- alt text
-- file URL
-- filename
-- mime type
-- parent post title if available
-
-If the selected tool requires visual understanding, extend the OpenAI client carefully so a tool can optionally send the attachment as an image input as part of the Responses API request.
-
----
-
-## Security Requirements
-- All lookups and updates must remain admin-side only.
-- Use current capability checks, not UI trust.
-- Sanitize all request values.
-- Validate all selected post and attachment IDs server-side.
-- Reject mismatched entity types.
-- Reject unsupported mappings.
-- Reject updates for fields not declared in the tool’s apply mapping config.
-- Use `wp_update_post()` for post and attachment post-field updates.
-- Use `update_post_meta( $attachment_id, '_wp_attachment_image_alt', ... )` for alt text.
-- Require explicit nonce/auth validation for AJAX and REST operations.
-
-Do not expose anything publicly.
-
----
-
-## Implementation Plan
-Follow this order.
-
-### Step 1 — Inspect current runner and source flow
-Understand exactly how these work before changing anything:
-- tool edit form save flow
-- tool validation
-- runner page rendering
-- localized public tool definitions
-- REST run request
-- output rendering
-- existing post-source resolution in `FAT_Tool_Runner::resolve_inputs_from_selected_post()`
-
-Confirm what is already implemented for:
-- selected post source
-- auto-fill behavior
-- runner AJAX lookups
-
-Do not refactor unrelated code.
-
-### Step 2 — Add tool-level WordPress integration config
-Add a new nullable JSON-backed tool column, e.g. `wp_integration`, using the existing `dbDelta()` upgrade pattern.
-
-Files:
-- `includes/class-fat-activator.php`
-- `includes/class-fat-tools-repository.php`
-- `includes/class-fat-tool-validator.php`
-- `includes/class-fat-admin.php`
-
-Requirements:
-- add the column to the tools table
-- persist it in the repository
-- decode/encode it like existing schema fields
-- add admin form controls to configure:
-  - source type support (`post`, `attachment`, or none)
-  - whether manual content is allowed
-  - apply target (`post`, `attachment`, or none)
-  - output-to-WordPress field mappings
-- keep the UI basic and table-driven like existing schema editing
-
-Do not build a full visual rule engine.
-
-### Step 3 — Validate the integration config
-In `class-fat-tool-validator.php`, validate the new config.
-
-Requirements:
-- reject invalid source types
-- reject invalid apply target types
-- reject duplicate mapping rows
-- reject mappings for output keys that do not exist in `output_schema`
-- reject unsupported `wp_field` values
-- require source/apply target compatibility
-  - post apply mappings require `target = post`
-  - attachment mappings require `target = attachment`
-
-Allowed `wp_field` values for v1:
-- `post_title`
-- `post_excerpt`
-- `post_content`
+- `title`
 - `alt_text`
+- `description`
 
-Do not allow arbitrary field names.
+Then map internally to WordPress storage:
 
-### Step 4 — Expand runner lookup endpoints
-Add any missing lookup endpoints in `class-fat-admin.php`.
+- `title` -> attachment post title
+- `alt_text` -> `_wp_attachment_image_alt`
+- `description` -> attachment post content or appropriate attachment description field
 
-Requirements:
-- keep the existing post lookup endpoint
-- add a simple authenticated attachment lookup endpoint, for example:
-  - `wp_ajax_fat_runner_attachments`
-- return recent image attachments ordered by modified date descending
-- include at least:
-  - `id`
-  - `title`
-  - `filename`
-- keep it simple in v1; no search box required
+## 3. Shared media-processing stages
+Image workflows should be thought of as discrete stages:
 
-Do not expose attachment lookup publicly.
+### Generated-image flow
+1. accept prompt
+2. generate image
+3. save source image
+4. generate metadata
+5. create derivative
+6. optionally apply as featured image
 
-### Step 5 — Extend server-side source resolution
-In `class-fat-tool-runner.php`, extend source resolution so the runner can build effective inputs from both posts and attachments.
+### Uploaded-image flow
+1. accept file upload
+2. validate image
+3. process/crop/convert
+4. save processed attachment
+5. generate metadata
+6. optionally apply as featured image
 
-Requirements:
-- keep existing post-based article resolution working
-- add a new attachment-resolution branch
-- when an attachment is selected:
-  - fetch attachment with WordPress APIs
-  - validate it is an attachment
-  - gather attachment context fields
-  - merge them into effective tool inputs without trusting browser values
-- do this before runtime input validation and before prompt rendering
-
-Suggested approach:
-- generalize current selected-post resolution into a broader method such as:
-  - `resolve_contextual_inputs()`
-- keep logic explicit and readable
-- preserve backward compatibility for plain text tools
-
-### Step 6 — Extend the OpenAI client only as needed for media tools
-Only if needed for attachment metadata quality, extend `class-fat-openai-client.php` to support image input in addition to text input.
-
-Requirements:
-- keep current text-only structured output path working exactly as before
-- add an optional multimodal request path for tools configured to use attachment image input
-- keep the response parsing and structured output validation consistent
-- only enable image input when the tool config explicitly requires it
-
-Do not break existing tools.
-Do not replace the current structured JSON output flow.
-
-### Step 7 — Return apply metadata from the run response
-After generation succeeds, the runner needs enough context to offer an apply step.
-
-In the run response, include safe metadata such as:
-- selected entity type (`post` or `attachment`)
-- selected entity ID if applicable
-- tool apply config filtered for runtime use
-- available output keys
-
-Do not expose private tool internals.
-
-This can be added in:
-- `includes/class-fat-tool-runner.php`
-- `includes/class-fat-rest-controller.php`
-
-### Step 8 — Add an apply REST endpoint
-Add a new route to `class-fat-rest-controller.php`, e.g.:
-- `POST /fabled-ai-tools/v1/apply`
-
-Payload shape should include:
-- `tool_id`
-- `target_type`
-- `target_id`
-- `outputs`
-- `apply_fields`
-
-Behavior:
-- re-check tool access
-- load the full tool definition
-- validate target entity type and existence
-- validate requested apply fields against tool config
-- sanitize final values
-- update WordPress fields server-side
-- return success plus list of updated fields
-
-Important:
-- do not trust client-declared mappings
-- do not trust unchecked outputs
-- only allow known mappings from tool config
-
-### Step 9 — Update runner UI for apply workflow
-In `assets/admin.js`, extend the runner UI.
-
-Requirements:
-- preserve current generate flow
-- preserve current post source flow
-- add attachment source controls for tools that support attachments
-- after a successful run, if the tool supports apply mappings:
-  - render an **Apply** panel under the outputs
-  - show the resolved target label
-  - show one checkbox per allowed mapping
-  - pre-check sensible defaults if appropriate
-  - add an **Apply Selected Fields** button
-- after apply succeeds, show a clear success status
-
-If generation came from pasted text and the tool supports post apply:
-- allow selecting a target post before applying
-- keep this simple: a post dropdown is enough
-
-Do not auto-apply on generation.
-
-### Step 10 — Minimal admin UI for integration config
-In `class-fat-admin.php`, add a small new section on the tool edit screen for WordPress integration.
-
-Requirements:
-- allow the admin to enable post source or attachment source
-- allow the admin to enable apply target type
-- allow the admin to define mapping rows:
-  - output key
-  - target WordPress field
-  - display label
-- keep it table-based like the existing input/output schema sections
-- use existing row-template style instead of introducing a new framework
-
-Do not overdesign the editor.
-The admin only needs enough control to define reliable mappings.
+Keeping these stages separate makes debugging and future extension much easier.
 
 ---
 
-## Field Mapping Rules
-These are the only supported mappings in v1.
+# Default Product Specifications
 
-### Post target mappings
-- `post_title`
-- `post_excerpt`
-- `post_content`
+## Tool 1: Featured Image Generator
 
-### Attachment target mappings
-- `post_title`
-- `post_excerpt` (caption)
-- `post_content` (description)
-- `alt_text` (maps to `_wp_attachment_image_alt`)
+### Purpose
+User pastes a prompt and receives a ready-to-use media-library image with metadata and optional featured-image apply support.
 
-No arbitrary post meta.
-No arbitrary attachment meta.
-No taxonomy updates.
-No featured-image assignment.
+### Defaults
+- default model: `gpt-image-1-mini`
+- default quality: `low`
+- source generation size: `1536x1024`
+- derivative target size: `1200x675`
+- derivative target format: `png`
 
----
+### Required behavior
+- user provides only a prompt
+- plugin generates the image
+- plugin saves the generated source image or practical equivalent
+- plugin generates title, alt text, and description
+- plugin creates a cropped/normalized `1200x675` PNG derivative
+- plugin allows user to explicitly apply that image as featured image to a selected post
 
-## Acceptance Criteria
-The feature is complete when all are true:
-
-1. A user can generate an excerpt from a selected draft and explicitly apply it to that post’s excerpt.
-2. A user can generate an excerpt from a selected published post and explicitly apply it to that post’s excerpt.
-3. A media metadata tool can select an attachment and generate title, alt text, caption, and description outputs.
-4. The user can choose any subset of those generated media outputs and apply only the checked fields.
-5. Existing generate-only tools still work unchanged.
-6. Existing post-source behavior still works.
-7. No automatic overwrites happen without an explicit apply step.
-8. Invalid mappings, invalid targets, and unauthorized requests fail safely server-side.
-9. The implementation does not introduce a plugin-wide rewrite.
+### Important note
+The derivative generation should be a server-side image-processing step, not a second image-generation request.
 
 ---
 
-## Manual Test Checklist
-### Existing behavior
-- existing featured image prompt tool still works with pasted body text
-- existing SEO excerpt tool still works with pasted body text
-- combined tool still works with selected draft/published post source
+## Tool 2: Uploaded Image Processor
 
-### Post apply workflow
-- select a draft, generate excerpt, apply excerpt to the same draft
-- select a published post, generate excerpt, apply excerpt to the same post
-- generate output from pasted text, then manually choose a target post and apply excerpt
-- attempt to apply with no fields selected and verify a clean error
-- attempt to apply to an invalid post ID and verify server-side rejection
+### Purpose
+User uploads an image and receives a standardized, metadata-enriched featured-image-ready asset.
 
-### Media workflow
-- select an attachment, generate metadata
-- apply only alt text
-- apply title + caption + description without alt text
-- verify attachment title updates correctly
-- verify caption updates correctly
-- verify description updates correctly
-- verify `_wp_attachment_image_alt` updates correctly
-- verify non-image or invalid attachments fail cleanly if unsupported
+### Defaults
+- target size: `1200x675`
+- target format: `webp`
 
-### Security
-- user without run capability cannot use lookups or apply endpoint
-- user cannot update unsupported fields by tampering with the request
-- tool with no apply config does not show apply UI
+### Required behavior
+- user uploads a single image
+- plugin validates it
+- plugin creates a `1200x675` WebP derivative
+- plugin saves the processed image to the media library
+- plugin generates title, alt text, and description
+- plugin allows user to explicitly apply that image as featured image to a selected post
 
 ---
 
-## Coding Preferences
-- Prefer small, explicit methods.
-- Reuse current repository and admin patterns.
-- Avoid introducing extra classes unless they eliminate clear duplication.
-- Add comments only where they clarify a non-obvious safety rule.
-- Keep JS imperative and simple like the existing runner code.
-- Keep CSS minimal.
+# Security and implementation constraints
+
+Codex must preserve the following constraints:
+
+- no API keys exposed to the browser
+- no direct client-side OpenAI calls
+- capability checks for post edit / media operations
+- nonce/auth checks consistent with current plugin architecture
+- file upload validation for uploaded-image workflow
+- explicit apply actions only
+- safe error handling with useful messages
+- no reliance on users manually saving hidden internal plugin state into the editor
+
+For WordPress interactions, prefer direct native WordPress functions/APIs over self-HTTP requests.
 
 ---
 
-## Deliverable Format
-When making changes, provide:
+# Logging and diagnostics requirements
 
-1. a short summary of what changed
-2. the exact files changed
-3. complete updated file contents for each changed file
-4. a short manual test checklist
+Codex should preserve or improve observability.
 
-Do not return vague pseudocode.
-Do not omit changed code with placeholders.
+For each image workflow, log enough information to diagnose failures:
+
+## Featured Image Generator
+- prompt
+- model
+- quality
+- requested size
+- image generation result
+- attachment save result
+- metadata generation result
+- derivative generation result
+- apply-as-featured-image result
+
+## Uploaded Image Processor
+- uploaded file info
+- validation result
+- processed derivative result
+- media save result
+- metadata generation result
+- apply-as-featured-image result
+
+If the plugin already has a logging or run-history pattern, integrate with that instead of building a separate system.
+
+Use temporary `error_log()` diagnostics during development only when necessary.
 
 ---
 
-## Non-Goals
-Do **not** implement these in this task:
-- searchable Select2 media pickers
-- Gutenberg sidebar or block editor integration
-- arbitrary custom field updates
-- taxonomy/tag/category updates
-- automatic post publish flows
-- image generation inside this task
-- asynchronous background jobs
-- bulk media updates
+# Backend implementation principles
+
+Codex should follow these principles:
+
+## 1. Prefer dedicated helpers/services
+Use dedicated internal services/helpers for:
+- image generation
+- image metadata generation
+- image derivative processing
+- attachment metadata persistence
+- post featured-image assignment
+
+## 2. Keep request contracts explicit
+Do not rely on implicit state or hidden assumptions.
+Requests should clearly indicate:
+- target post if any
+- apply action if any
+- uploaded file or prompt input
+- selected operation
+
+## 3. Keep apply explicit
+Applying an image as featured image must be user-triggered.
+
+Generation and processing may happen automatically within the tool flow.
+Featured-image assignment should remain a separate explicit action or an explicit combined action if clearly labeled.
+
+## 4. Reuse shared logic when it genuinely reduces duplication
+Shared logic is good for:
+- metadata persistence
+- post thumbnail assignment
+- validation of target post
+- capability checks
+
+Do not overabstract prematurely.
+
+---
+
+# Frontend implementation principles
+
+Codex should keep the UI simple and consistent with the plugin.
+
+## Shared UX expectations
+For both image tools:
+- clear primary action
+- visible loading states
+- explicit success/failure feedback
+- preview of resulting image if practical
+- target post selector only when relevant
+- apply button disabled when no valid target exists
+- output metadata displayed after generation/processing
+
+## Tool-specific UX
+
+### Featured Image Generator
+Inputs:
+- prompt textarea
+- optional post selector
+
+Outputs:
+- image preview
+- generated title
+- generated alt text
+- generated description
+- success state
+- apply-as-featured-image action
+
+### Uploaded Image Processor
+Inputs:
+- image upload input
+- optional post selector
+
+Outputs:
+- processed image preview
+- generated title
+- generated alt text
+- generated description
+- success state
+- apply-as-featured-image action
+
+---
+
+# Admin requirements
+
+Both tools should be available as **default built-in tools**.
+
+Codex should:
+- use the existing built-in/default tool registration mechanism if one exists
+- add these tools in the same spirit as the current built-in defaults
+- avoid requiring manual custom-tool creation for these two workflows
+
+If there is an admin-facing default settings UI for built-in tools, expose sensible defaults without overcomplicating configuration.
+
+---
+
+# Chunked implementation plan for Codex
+
+Codex should **not** implement all of this in one giant change unless the repo is already structured for it.
+
+Use the following chunk plan.
+
+---
+
+## Chunk 1 — Inspect and confirm architecture
+
+### Goal
+Understand the current plugin structure and identify the exact files/patterns to extend.
+
+### Instructions for Codex
+Read the current plugin implementation and confirm:
+
+- where built-in tools are registered
+- where existing tool runners are rendered
+- where REST routes are registered
+- where OpenAI/text tool execution is implemented
+- where media-library and apply/update logic currently lives
+- whether current logging already supports new run types
+
+### What to inspect
+At minimum, inspect files handling:
+- plugin bootstrap
+- built-in tool registration/defaults
+- REST route registration
+- admin UI pages
+- runner UI
+- logs/history
+- any existing apply/media helpers
+
+### Output
+Return:
+- exact files relevant to these new image tools
+- recommended insertion points
+- any ambiguities or risks
+- a concrete file plan before coding
+
+### Do not
+- do not implement changes yet
+- do not refactor anything yet
+
+---
+
+## Chunk 2 — Featured Image Generator backend
+
+### Goal
+Implement the backend/core logic for the AI-generated image workflow.
+
+### Scope
+Implement only the backend path for:
+
+- receiving a prompt
+- generating an image via OpenAI
+- saving the image into WordPress media
+- generating metadata for the image
+- creating the `1200x675` PNG derivative
+- persisting metadata
+- storing/logging enough information to debug failures
+
+### Important constraints
+- do not implement final runner UI yet unless minimally required
+- do not change Uploaded Image Processor yet
+- do not change existing text-tool execution unnecessarily
+
+### Definition of done
+This chunk is done when:
+- a backend execution path exists for Featured Image Generator
+- image generation works
+- media save works
+- metadata generation works
+- derivative creation works
+- result is inspectable in the media library
+
+---
+
+## Chunk 3 — Featured Image Generator frontend and apply flow
+
+### Goal
+Complete the user-facing workflow for Featured Image Generator.
+
+### Scope
+Implement:
+- prompt input UI
+- result preview UI
+- metadata display
+- optional post selector
+- explicit apply-as-featured-image action
+- clear success/error/loading states
+
+### Important constraints
+- applying featured image must be explicit
+- use canonical target field/action naming
+- preserve backward compatibility for existing tools
+
+### Definition of done
+This chunk is done when:
+- a user can generate an image from a prompt
+- see the resulting media
+- inspect generated metadata
+- explicitly apply it as the featured image for a selected post
+
+---
+
+## Chunk 4 — Uploaded Image Processor backend
+
+### Goal
+Implement the backend/core logic for the uploaded-image workflow.
+
+### Scope
+Implement only the backend path for:
+
+- accepting a user-uploaded image
+- validating allowed image types and limits
+- creating a processed `1200x675` WebP derivative
+- saving that processed asset to media library
+- generating metadata
+- storing/logging enough information to debug failures
+
+### Important constraints
+- do not change Featured Image Generator behavior in this chunk
+- do not overengineer file-processing abstractions
+
+### Definition of done
+This chunk is done when:
+- a backend execution path exists for uploaded-image processing
+- upload validation works
+- conversion to `1200x675` WebP works
+- media save works
+- metadata generation works
+
+---
+
+## Chunk 5 — Uploaded Image Processor frontend and apply flow
+
+### Goal
+Complete the user-facing workflow for Uploaded Image Processor.
+
+### Scope
+Implement:
+- upload input UI
+- result preview UI
+- metadata display
+- optional post selector
+- explicit apply-as-featured-image action
+- clear success/error/loading states
+
+### Important constraints
+- applying featured image must be explicit
+- do not regress other tool flows
+- preserve architecture consistency
+
+### Definition of done
+This chunk is done when:
+- a user can upload an image
+- the plugin processes it into `1200x675` WebP
+- metadata is generated and saved
+- the resulting image can be explicitly applied as featured image to a selected post
+
+---
+
+## Chunk 6 — Final cleanup, validation, and compatibility pass
+
+### Goal
+Stabilize the implementation and ensure compatibility.
+
+### Scope
+Codex should:
+- remove temporary noisy debug logging unless still useful
+- ensure field/action contracts are consistent
+- ensure both image tools are registered as built-in defaults
+- verify existing text tools still work
+- verify logging/run history remains coherent
+- update any internal help text/admin descriptions if needed
+
+### Definition of done
+This chunk is done when:
+- both new image tools work end-to-end
+- existing tools still work
+- code remains aligned with plugin conventions
+- the implementation is understandable and maintainable
+
+---
+
+# Codex operating rules
+
+For all chunks, Codex should follow these rules:
+
+1. inspect first, then code
+2. do not make large unrelated refactors
+3. prefer extending current patterns over inventing new subsystems
+4. preserve backward compatibility unless a change is clearly necessary
+5. use explicit request/response contracts
+6. prefer direct WordPress/media APIs over self-HTTP
+7. use canonical field names internally and map to WordPress storage explicitly
+8. return exact changed files after each chunk
+
+---
+
+# Testing expectations
+
+Codex should include or describe verification for the following.
+
+## Featured Image Generator
+- prompt accepted
+- image generated
+- image saved to media library
+- title generated and persisted
+- alt text generated and persisted
+- description generated and persisted
+- derivative PNG created at `1200x675`
+- image can be applied as featured image
+- failure cases handled cleanly
+
+## Uploaded Image Processor
+- image upload accepted
+- invalid file types rejected
+- image processed to `1200x675` WebP
+- processed image saved to media library
+- title generated and persisted
+- alt text generated and persisted
+- description generated and persisted
+- image can be applied as featured image
+- failure cases handled cleanly
+
+## Regression checks
+- existing text tools still run correctly
+- existing admin pages still load correctly
+- existing logs/history still work or fail gracefully
+- no API keys exposed to the browser
+- no unexpected dependence on manual editor save state
+
+---
+
+# Final instruction to Codex
+
+Use this file as the implementation source of truth for the next phase of plugin work.
+
+Do not treat this as a request for a broad rewrite.
+Treat it as a focused roadmap for adding two built-in image tools cleanly and safely.
+
+If any part of the current plugin architecture makes this plan ambiguous, inspect first, state the ambiguity, and then choose the smallest viable implementation that fits the existing codebase.
