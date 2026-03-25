@@ -98,6 +98,22 @@
     margin-top: 8px;
 }
 
+.fat-entity-search-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    margin-bottom: 8px;
+}
+
+.fat-entity-search-input {
+    max-width: 420px;
+}
+
+.fat-entity-load-more {
+    margin-top: 6px;
+    padding-left: 0;
+}
+
 .fat-content-body-status {
     margin-top: 6px;
 }

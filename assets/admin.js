@@ -103,8 +103,7 @@
 
         const tools = Array.isArray(data.tools) ? data.tools : [];
         const byId = {};
-        const postCache = {};
-        const attachmentCache = { items: null };
+        const entityCache = {};
         const contentSourceState = {
             source: 'paste',
             selectedPostId: '',
@@ -276,55 +275,42 @@
             };
         }
 
-        async function loadPostsForStatus(status) {
-            if (postCache[status]) {
-                return postCache[status];
+        async function fetchEntityList(kind, args) {
+            const params = Object.assign({ q: '', page: 1, per_page: 20 }, args || {});
+            const key = [kind, params.status || '', params.q || '', params.page, params.per_page].join('|');
+            if (entityCache[key]) {
+                return entityCache[key];
             }
 
             const endpoint = new URL(data.ajaxUrl || '', window.location.origin);
-            endpoint.searchParams.set('action', 'fat_runner_posts');
+            endpoint.searchParams.set('action', kind === 'posts' ? 'fat_runner_posts' : 'fat_runner_attachments');
             endpoint.searchParams.set('nonce', data.postsNonce || '');
-            endpoint.searchParams.set('status', status);
+            endpoint.searchParams.set('q', params.q || '');
+            endpoint.searchParams.set('page', String(params.page || 1));
+            endpoint.searchParams.set('per_page', String(params.per_page || 20));
+            if (kind === 'posts') {
+                endpoint.searchParams.set('status', params.status || 'publish');
+            }
 
             const response = await fetch(endpoint.toString(), {
                 method: 'GET',
                 credentials: 'same-origin'
             });
             const payload = await response.json();
-
             if (!response.ok || !payload.success) {
-                const defaultMessage = data.strings.loadPostsError || 'Unable to load posts for this source.';
-                throw new Error((payload && payload.data && payload.data.message) ? payload.data.message : defaultMessage);
+                const fallback = kind === 'posts'
+                    ? (data.strings.loadPostsError || 'Unable to load posts for this source.')
+                    : (data.strings.loadMediaError || 'Unable to load attachments.');
+                throw new Error((payload && payload.data && payload.data.message) ? payload.data.message : fallback);
             }
 
-            const posts = Array.isArray(payload.data.posts) ? payload.data.posts : [];
-            postCache[status] = posts;
-            return posts;
-        }
-
-        async function loadAttachments() {
-            if (Array.isArray(attachmentCache.items)) {
-                return attachmentCache.items;
-            }
-
-            const endpoint = new URL(data.ajaxUrl || '', window.location.origin);
-            endpoint.searchParams.set('action', 'fat_runner_attachments');
-            endpoint.searchParams.set('nonce', data.postsNonce || '');
-
-            const response = await fetch(endpoint.toString(), {
-                method: 'GET',
-                credentials: 'same-origin'
-            });
-            const payload = await response.json();
-
-            if (!response.ok || !payload.success) {
-                const defaultMessage = data.strings.loadMediaError || 'Unable to load attachments.';
-                throw new Error((payload && payload.data && payload.data.message) ? payload.data.message : defaultMessage);
-            }
-
-            const attachments = Array.isArray(payload.data.attachments) ? payload.data.attachments : [];
-            attachmentCache.items = attachments;
-            return attachments;
+            const parsed = {
+                items: Array.isArray(payload.data[kind]) ? payload.data[kind] : [],
+                hasMore: !!(payload && payload.data && payload.data.has_more),
+                nextPage: (payload && payload.data && payload.data.next_page) ? parseInt(payload.data.next_page, 10) : null
+            };
+            entityCache[key] = parsed;
+            return parsed;
         }
 
         function setArticleInputState(disabled) {
@@ -334,11 +320,16 @@
             contentSourceState.articleInput.disabled = !!disabled;
         }
 
-        function buildOptions(selectEl, items, placeholderText, formatLabel) {
+        function buildOptions(selectEl, items, placeholderText, formatLabel, append) {
+            if (!append) {
+                selectEl.innerHTML = '';
+            }
             const placeholder = document.createElement('option');
             placeholder.value = '';
             placeholder.textContent = placeholderText;
-            selectEl.appendChild(placeholder);
+            if (!append || !selectEl.querySelector('option[value=""]')) {
+                selectEl.appendChild(placeholder);
+            }
 
             items.forEach(function (item) {
                 const option = document.createElement('option');
@@ -346,6 +337,122 @@
                 option.textContent = formatLabel(item);
                 selectEl.appendChild(option);
             });
+        }
+
+        function createAsyncEntitySelector(config) {
+            const state = {
+                page: 1,
+                query: '',
+                hasMore: false,
+                loading: false
+            };
+
+            const wrap = document.createElement('div');
+            wrap.className = 'fat-entity-selector';
+
+            const searchRow = document.createElement('div');
+            searchRow.className = 'fat-entity-search-row';
+            wrap.appendChild(searchRow);
+
+            const searchInput = document.createElement('input');
+            searchInput.type = 'search';
+            searchInput.className = 'regular-text fat-entity-search-input';
+            searchInput.placeholder = config.searchPlaceholder || '';
+            searchRow.appendChild(searchInput);
+
+            const searchButton = document.createElement('button');
+            searchButton.type = 'button';
+            searchButton.className = 'button';
+            searchButton.textContent = data.strings.searchButton || 'Search';
+            searchRow.appendChild(searchButton);
+
+            const selectEl = document.createElement('select');
+            selectEl.className = 'fat-content-post-select';
+            wrap.appendChild(selectEl);
+            buildOptions(selectEl, [], config.placeholder || '', config.formatLabel || function (item) { return item.title || ('#' + item.id); }, false);
+
+            const statusEl = document.createElement('p');
+            statusEl.className = 'description';
+            wrap.appendChild(statusEl);
+
+            const loadMoreButton = document.createElement('button');
+            loadMoreButton.type = 'button';
+            loadMoreButton.className = 'button button-link fat-entity-load-more';
+            loadMoreButton.textContent = data.strings.loadMore || 'Load more';
+            loadMoreButton.hidden = true;
+            wrap.appendChild(loadMoreButton);
+
+            async function hydrate(page, append) {
+                if (state.loading) {
+                    return;
+                }
+                state.loading = true;
+                statusEl.textContent = config.loadingMessage || '';
+                try {
+                    const result = await config.fetcher({
+                        q: state.query,
+                        page: page,
+                        per_page: 20
+                    });
+                    state.page = page;
+                    state.hasMore = !!result.hasMore;
+                    buildOptions(selectEl, result.items || [], config.placeholder || '', config.formatLabel, append);
+                    if (!append && !result.items.length) {
+                        statusEl.textContent = config.emptyMessage || '';
+                    } else {
+                        statusEl.textContent = '';
+                    }
+                    loadMoreButton.hidden = !state.hasMore;
+                } catch (error) {
+                    statusEl.textContent = error.message || config.errorMessage || '';
+                    loadMoreButton.hidden = true;
+                    if (!append) {
+                        buildOptions(selectEl, [], config.placeholder || '', config.formatLabel, false);
+                    }
+                } finally {
+                    state.loading = false;
+                }
+            }
+
+            function triggerSearch() {
+                state.query = (searchInput.value || '').trim();
+                hydrate(1, false);
+            }
+
+            searchButton.addEventListener('click', triggerSearch);
+            searchInput.addEventListener('keydown', function (event) {
+                if (event.key === 'Enter') {
+                    event.preventDefault();
+                    triggerSearch();
+                }
+            });
+            loadMoreButton.addEventListener('click', function () {
+                if (!state.hasMore) {
+                    return;
+                }
+                hydrate(state.page + 1, true);
+            });
+
+            hydrate(1, false);
+
+            return {
+                wrap: wrap,
+                select: selectEl,
+                status: statusEl,
+                setValue: function (value) {
+                    if (value) {
+                        selectEl.value = String(value);
+                    }
+                },
+                getValue: function () {
+                    return selectEl.value || '';
+                },
+                reload: function () {
+                    searchInput.value = '';
+                    state.query = '';
+                    hydrate(1, false);
+                }
+            };
         }
 
         function renderArticleSourceControls(tool) {
@@ -405,14 +512,26 @@
             postSelectWrap.className = 'fat-content-post-wrap';
             postSelectWrap.hidden = true;
 
-            const postSelect = document.createElement('select');
-            postSelect.id = 'fat-content-post-select';
-            postSelect.className = 'fat-content-post-select';
-            postSelectWrap.appendChild(postSelect);
-
-            const postStatus = document.createElement('p');
-            postStatus.className = 'description fat-content-post-status';
-            postSelectWrap.appendChild(postStatus);
+            const postSelector = createAsyncEntitySelector({
+                searchPlaceholder: data.strings.searchPosts || 'Search posts by title…',
+                placeholder: data.strings.choosePost || 'Choose a post',
+                loadingMessage: data.strings.loadingPosts || 'Loading posts…',
+                emptyMessage: data.strings.noPostsFound || 'No posts found for this status.',
+                errorMessage: data.strings.loadPostsError || 'Unable to load posts for this source.',
+                formatLabel: function (post) {
+                    return post.title || ('#' + post.id);
+                },
+                fetcher: function (params) {
+                    return fetchEntityList('posts', {
+                        status: sourceSelect.value || 'publish',
+                        q: params.q,
+                        page: params.page,
+                        per_page: params.per_page
+                    });
+                }
+            });
+            postSelector.select.id = 'fat-content-post-select';
+            postSelectWrap.appendChild(postSelector.wrap);
 
             controlsWrap.appendChild(postSelectWrap);
 
@@ -425,8 +544,6 @@
             async function updateSourceUi(source) {
                 contentSourceState.source = source;
                 contentSourceState.selectedPostId = '';
-                postSelect.innerHTML = '';
-                postStatus.textContent = '';
 
                 if (source === 'paste') {
                     postSelectWrap.hidden = true;
@@ -438,29 +555,14 @@
                 postSelectWrap.hidden = false;
                 setArticleInputState(true);
                 bodyStatus.textContent = data.strings.bodyFilledFromPost || 'Article body will be pulled from the selected post.';
-                postStatus.textContent = data.strings.loadingPosts || 'Loading posts…';
-
-                try {
-                    const posts = await loadPostsForStatus(source);
-                    postSelect.innerHTML = '';
-                    buildOptions(postSelect, posts, data.strings.choosePost || 'Choose a post', function (post) {
-                        return post.title || ('#' + post.id);
-                    });
-                    postStatus.textContent = posts.length ? '' : (data.strings.noPostsFound || 'No posts found for this status.');
-                } catch (error) {
-                    postSelect.innerHTML = '';
-                    buildOptions(postSelect, [], data.strings.choosePost || 'Choose a post', function (post) {
-                        return post.title || ('#' + post.id);
-                    });
-                    postStatus.textContent = error.message || (data.strings.loadPostsError || 'Unable to load posts for this source.');
-                }
+                postSelector.reload();
             }
 
             sourceSelect.addEventListener('change', function () {
                 updateSourceUi(sourceSelect.value);
             });
-            postSelect.addEventListener('change', function () {
-                contentSourceState.selectedPostId = postSelect.value || '';
+            postSelector.select.addEventListener('change', function () {
+                contentSourceState.selectedPostId = postSelector.getValue();
             });
 
             contentSourceState.controls = controlsWrap;
@@ -489,42 +591,35 @@
             sourceLabel.textContent = data.strings.mediaSource || 'Media Source';
             controlsWrap.appendChild(sourceLabel);
 
-            const attachmentSelect = document.createElement('select');
-            attachmentSelect.id = 'fat-attachment-source';
-            attachmentSelect.className = 'fat-content-post-select';
-            controlsWrap.appendChild(attachmentSelect);
-
-            const attachmentStatus = document.createElement('p');
-            attachmentStatus.className = 'description';
-            controlsWrap.appendChild(attachmentStatus);
+            const attachmentSelector = createAsyncEntitySelector({
+                searchPlaceholder: data.strings.searchMedia || 'Search media by title or filename…',
+                placeholder: data.strings.chooseMedia || 'Choose an attachment',
+                loadingMessage: data.strings.loadingMedia || 'Loading media…',
+                emptyMessage: data.strings.noMediaFound || 'No attachments found.',
+                errorMessage: data.strings.loadMediaError || 'Unable to load attachments.',
+                formatLabel: function (attachment) {
+                    const title = attachment.title || ('#' + attachment.id);
+                    return attachment.filename ? title + ' (' + attachment.filename + ')' : title;
+                },
+                fetcher: function (params) {
+                    return fetchEntityList('attachments', {
+                        q: params.q,
+                        page: params.page,
+                        per_page: params.per_page
+                    });
+                }
+            });
+            attachmentSelector.select.id = 'fat-attachment-source';
+            controlsWrap.appendChild(attachmentSelector.wrap);
 
             fieldsWrap.insertBefore(controlsWrap, fieldsWrap.firstChild);
 
-            attachmentSelect.addEventListener('change', function () {
-                contentSourceState.selectedAttachmentId = attachmentSelect.value || '';
+            attachmentSelector.select.addEventListener('change', function () {
+                contentSourceState.selectedAttachmentId = attachmentSelector.getValue();
             });
 
-            async function hydrateAttachments() {
-                attachmentStatus.textContent = data.strings.loadingMedia || 'Loading media…';
-                attachmentSelect.innerHTML = '';
-
-                try {
-                    const attachments = await loadAttachments();
-                    buildOptions(attachmentSelect, attachments, data.strings.chooseMedia || 'Choose an attachment', function (attachment) {
-                        const title = attachment.title || ('#' + attachment.id);
-                        return attachment.filename ? title + ' (' + attachment.filename + ')' : title;
-                    });
-                    attachmentStatus.textContent = attachments.length ? '' : (data.strings.noMediaFound || 'No attachments found.');
-                } catch (error) {
-                    buildOptions(attachmentSelect, [], data.strings.chooseMedia || 'Choose an attachment', function (attachment) {
-                        return attachment.title || ('#' + attachment.id);
-                    });
-                    attachmentStatus.textContent = error.message || (data.strings.loadMediaError || 'Unable to load attachments.');
-                }
-            }
-
             contentSourceState.attachmentControls = controlsWrap;
-            hydrateAttachments();
+            attachmentSelector.reload();
         }
 
         function renderRunnerActions() {
@@ -727,6 +822,7 @@
             panel.appendChild(help);
 
             let selectedTargetId = String(applyMeta.target_id || '');
+            let onTargetChanged = function () {};
             if (applyMeta.target_type === 'post') {
                 const targetWrap = document.createElement('div');
                 targetWrap.className = 'fat-field';
@@ -735,39 +831,49 @@
                 label.textContent = data.strings.applyTarget || 'Target';
                 targetWrap.appendChild(label);
 
-                const targetSelect = document.createElement('select');
-                targetSelect.className = 'fat-content-post-select';
-                targetWrap.appendChild(targetSelect);
-                panel.appendChild(targetWrap);
-
-                buildOptions(targetSelect, [], data.strings.choosePost || 'Choose a post', function (post) {
-                    return post.title || ('#' + post.id);
-                });
-
-                Promise.all([loadPostsForStatus('draft'), loadPostsForStatus('publish')]).then(function (result) {
-                    const draftPosts = result[0] || [];
-                    const publishPosts = result[1] || [];
-                    const merged = draftPosts.concat(
-                        publishPosts.filter(function (post) {
-                            return !draftPosts.some(function (draftPost) {
-                                return String(draftPost.id) === String(post.id);
-                            });
-                        })
-                    );
-                    targetSelect.innerHTML = '';
-                    buildOptions(targetSelect, merged, data.strings.choosePost || 'Choose a post', function (post) {
+                const targetSelector = createAsyncEntitySelector({
+                    searchPlaceholder: data.strings.searchPosts || 'Search posts by title…',
+                    placeholder: data.strings.choosePost || 'Choose a post',
+                    loadingMessage: data.strings.loadingPosts || 'Loading posts…',
+                    emptyMessage: data.strings.noPostsFound || 'No posts found for this status.',
+                    errorMessage: data.strings.loadPostsError || 'Unable to load posts for this source.',
+                    formatLabel: function (post) {
                         return post.title || ('#' + post.id);
-                    });
-                    if (selectedTargetId) {
-                        targetSelect.value = selectedTargetId;
+                    },
+                    fetcher: async function (params) {
+                        const draftResult = await fetchEntityList('posts', {
+                            status: 'draft',
+                            q: params.q,
+                            page: params.page,
+                            per_page: Math.ceil(params.per_page / 2)
+                        });
+                        const publishResult = await fetchEntityList('posts', {
+                            status: 'publish',
+                            q: params.q,
+                            page: params.page,
+                            per_page: Math.ceil(params.per_page / 2)
+                        });
+                        const merged = (draftResult.items || []).concat(
+                            (publishResult.items || []).filter(function (post) {
+                                return !(draftResult.items || []).some(function (draftPost) {
+                                    return String(draftPost.id) === String(post.id);
+                                });
+                            })
+                        );
+                        return {
+                            items: merged,
+                            hasMore: !!draftResult.hasMore || !!publishResult.hasMore
+                        };
                     }
-                }).catch(function () {
-                    // Keep fallback placeholder only.
                 });
-
-                targetSelect.addEventListener('change', function () {
-                    selectedTargetId = targetSelect.value || '';
+                targetWrap.appendChild(targetSelector.wrap);
+                panel.appendChild(targetWrap);
+                targetSelector.reload();
+                targetSelector.setValue(selectedTargetId);
+                targetSelector.select.addEventListener('change', function () {
+                    selectedTargetId = targetSelector.getValue();
                     runState.targetId = selectedTargetId;
+                    onTargetChanged();
                 });
             } else if (applyMeta.target_type === 'attachment') {
                 selectedTargetId = selectedTargetId || contentSourceState.selectedAttachmentId;
@@ -789,6 +895,16 @@
                 list.appendChild(row);
             });
             panel.appendChild(list);
+
+            const targetSummary = document.createElement('p');
+            targetSummary.className = 'fat-muted fat-apply-target-summary';
+            targetSummary.textContent = (data.strings.applyTargetSelected || 'Selected target') + ': ' + (selectedTargetId ? ('#' + selectedTargetId) : (data.strings.applyTargetNone || 'No target selected.'));
+            panel.appendChild(targetSummary);
+            onTargetChanged = function () {
+                targetSummary.textContent = (data.strings.applyTargetSelected || 'Selected target') + ': ' + (runState.targetId ? ('#' + runState.targetId) : (data.strings.applyTargetNone || 'No target selected.'));
+            };
+
+            list.addEventListener('change', onTargetChanged);
 
             const button = document.createElement('button');
             button.type = 'button';
@@ -862,25 +978,31 @@
             targetLabel.textContent = data.strings.applyTarget || 'Target';
             targetWrap.appendChild(targetLabel);
 
-            const targetSelect = document.createElement('select');
-            targetSelect.className = 'fat-content-post-select';
-            targetWrap.appendChild(targetSelect);
-            applyPanel.appendChild(targetWrap);
-
-            buildOptions(targetSelect, [], data.strings.choosePost || 'Choose a post', function (post) {
-                return post.title || ('#' + post.id);
-            });
-
-            Promise.all([loadPostsForStatus('draft'), loadPostsForStatus('publish')]).then(function (result) {
-                const posts = (result[0] || []).concat(result[1] || []);
-                const deduped = posts.filter(function (post, idx, all) {
-                    return all.findIndex(function (item) { return String(item.id) === String(post.id); }) === idx;
-                });
-                targetSelect.innerHTML = '';
-                buildOptions(targetSelect, deduped, data.strings.choosePost || 'Choose a post', function (post) {
+            const targetSelector = createAsyncEntitySelector({
+                searchPlaceholder: data.strings.searchPosts || 'Search posts by title…',
+                placeholder: data.strings.choosePost || 'Choose a post',
+                loadingMessage: data.strings.loadingPosts || 'Loading posts…',
+                emptyMessage: data.strings.noPostsFound || 'No posts found for this status.',
+                errorMessage: data.strings.loadPostsError || 'Unable to load posts for this source.',
+                formatLabel: function (post) {
                     return post.title || ('#' + post.id);
-                });
+                },
+                fetcher: async function (params) {
+                    const draftResult = await fetchEntityList('posts', { status: 'draft', q: params.q, page: params.page, per_page: Math.ceil(params.per_page / 2) });
+                    const publishResult = await fetchEntityList('posts', { status: 'publish', q: params.q, page: params.page, per_page: Math.ceil(params.per_page / 2) });
+                    const merged = (draftResult.items || []).concat(
+                        (publishResult.items || []).filter(function (post) {
+                            return !(draftResult.items || []).some(function (draftPost) {
+                                return String(draftPost.id) === String(post.id);
+                            });
+                        })
+                    );
+                    return { items: merged, hasMore: !!draftResult.hasMore || !!publishResult.hasMore };
+                }
             });
+            targetWrap.appendChild(targetSelector.wrap);
+            applyPanel.appendChild(targetWrap);
+            targetSelector.reload();
 
             const applyButton = document.createElement('button');
             applyButton.type = 'button';
@@ -889,8 +1011,8 @@
             applyButton.disabled = true;
             applyPanel.appendChild(applyButton);
 
-            targetSelect.addEventListener('change', function () {
-                runState.targetId = targetSelect.value || '';
+            targetSelector.select.addEventListener('change', function () {
+                runState.targetId = targetSelector.getValue();
                 applyButton.disabled = !runState.targetId;
             });
 
@@ -991,25 +1113,31 @@
             targetLabel.textContent = data.strings.applyTarget || 'Target';
             targetWrap.appendChild(targetLabel);
 
-            const targetSelect = document.createElement('select');
-            targetSelect.className = 'fat-content-post-select';
-            targetWrap.appendChild(targetSelect);
-            applyPanel.appendChild(targetWrap);
-
-            buildOptions(targetSelect, [], data.strings.choosePost || 'Choose a post', function (post) {
-                return post.title || ('#' + post.id);
-            });
-
-            Promise.all([loadPostsForStatus('draft'), loadPostsForStatus('publish')]).then(function (result) {
-                const posts = (result[0] || []).concat(result[1] || []);
-                const deduped = posts.filter(function (post, idx, all) {
-                    return all.findIndex(function (item) { return String(item.id) === String(post.id); }) === idx;
-                });
-                targetSelect.innerHTML = '';
-                buildOptions(targetSelect, deduped, data.strings.choosePost || 'Choose a post', function (post) {
+            const targetSelector = createAsyncEntitySelector({
+                searchPlaceholder: data.strings.searchPosts || 'Search posts by title…',
+                placeholder: data.strings.choosePost || 'Choose a post',
+                loadingMessage: data.strings.loadingPosts || 'Loading posts…',
+                emptyMessage: data.strings.noPostsFound || 'No posts found for this status.',
+                errorMessage: data.strings.loadPostsError || 'Unable to load posts for this source.',
+                formatLabel: function (post) {
                     return post.title || ('#' + post.id);
-                });
+                },
+                fetcher: async function (params) {
+                    const draftResult = await fetchEntityList('posts', { status: 'draft', q: params.q, page: params.page, per_page: Math.ceil(params.per_page / 2) });
+                    const publishResult = await fetchEntityList('posts', { status: 'publish', q: params.q, page: params.page, per_page: Math.ceil(params.per_page / 2) });
+                    const merged = (draftResult.items || []).concat(
+                        (publishResult.items || []).filter(function (post) {
+                            return !(draftResult.items || []).some(function (draftPost) {
+                                return String(draftPost.id) === String(post.id);
+                            });
+                        })
+                    );
+                    return { items: merged, hasMore: !!draftResult.hasMore || !!publishResult.hasMore };
+                }
             });
+            targetWrap.appendChild(targetSelector.wrap);
+            applyPanel.appendChild(targetWrap);
+            targetSelector.reload();
 
             const applyButton = document.createElement('button');
             applyButton.type = 'button';
@@ -1018,8 +1146,8 @@
             applyButton.disabled = true;
             applyPanel.appendChild(applyButton);
 
-            targetSelect.addEventListener('change', function () {
-                runState.targetId = targetSelect.value || '';
+            targetSelector.select.addEventListener('change', function () {
+                runState.targetId = targetSelector.getValue();
                 applyButton.disabled = !runState.targetId;
                 applyButton.dataset.allowEnabled = applyButton.disabled ? '0' : '1';
             });
