@@ -10,6 +10,7 @@ class FAT_Activator {
         self::add_capabilities();
         self::seed_example_tools();
         self::maybe_backfill_seeded_wp_integration();
+        self::maybe_seed_missing_featured_image_generator();
         self::maybe_repair_corrupted_seeded_tools();
         update_option( 'fat_db_version', FAT_DB_VERSION );
     }
@@ -19,11 +20,15 @@ class FAT_Activator {
     }
 
     public static function maybe_upgrade() {
+        // Keep missing built-ins backfilled even when schema version is unchanged.
+        self::maybe_seed_missing_featured_image_generator();
+
         $installed = get_option( 'fat_db_version', '' );
         if ( FAT_DB_VERSION !== $installed ) {
             self::create_tables();
             self::add_capabilities();
             self::maybe_backfill_seeded_wp_integration();
+            self::maybe_seed_missing_featured_image_generator();
             self::maybe_repair_corrupted_seeded_tools();
             update_option( 'fat_db_version', FAT_DB_VERSION );
         }
@@ -172,6 +177,10 @@ class FAT_Activator {
                 'log_outputs'          => 1,
                 'sort_order'           => 10,
             )
+        );
+
+        $repo->create(
+            self::featured_image_generator_blueprint( $common_roles )
         );
 
         $repo->create(
@@ -434,6 +443,7 @@ class FAT_Activator {
 
     protected static function seeded_tool_blueprints() {
         return array(
+            'featured-image-generator' => self::featured_image_generator_blueprint( array( 'administrator', 'editor', 'author' ) ),
             'seo-excerpt' => array(
                 'name'                 => 'SEO Excerpt',
                 'slug'                 => 'seo-excerpt',
@@ -577,6 +587,88 @@ class FAT_Activator {
                 'log_outputs'          => 1,
                 'sort_order'           => 30,
             ),
+        );
+    }
+
+    protected static function maybe_seed_missing_featured_image_generator() {
+        $repo = new FAT_Tools_Repository();
+        $tool = $repo->get_by_slug( 'featured-image-generator' );
+        if ( $tool ) {
+            return;
+        }
+
+        $repo->create( self::featured_image_generator_blueprint( array( 'administrator', 'editor', 'author' ) ) );
+    }
+
+    protected static function featured_image_generator_blueprint( $roles ) {
+        return array(
+            'name'                 => 'Featured Image Generator',
+            'slug'                 => 'featured-image-generator',
+            'description'          => 'Generates a featured image, stores it in Media Library, creates metadata, and prepares a 1200x675 PNG featured-image derivative.',
+            'is_active'            => 1,
+            'allowed_roles'        => $roles,
+            'allowed_capabilities' => array(),
+            'model'                => '',
+            'system_prompt'        => 'This built-in workflow uses server-side image generation and metadata generation. Text prompt fields are kept for backward-compatible tool editing only.',
+            'user_prompt_template' => '{{input.prompt}}',
+            'input_schema'         => array(
+                array(
+                    'key'         => 'prompt',
+                    'label'       => 'Image Prompt',
+                    'type'        => 'textarea',
+                    'required'    => 1,
+                    'help_text'   => 'Describe the featured image to generate.',
+                    'placeholder' => 'Describe the image you want to generate...',
+                    'max_length'  => 2000,
+                ),
+            ),
+            'output_schema'        => array(
+                array(
+                    'key'      => 'title',
+                    'label'    => 'Generated Title',
+                    'type'     => 'text',
+                    'copyable' => 1,
+                ),
+                array(
+                    'key'      => 'alt_text',
+                    'label'    => 'Generated Alt Text',
+                    'type'     => 'text',
+                    'copyable' => 1,
+                ),
+                array(
+                    'key'      => 'description',
+                    'label'    => 'Generated Description',
+                    'type'     => 'long_text',
+                    'copyable' => 1,
+                ),
+            ),
+            'wp_integration'       => array(
+                'workflow' => 'featured_image_generator',
+                'workflow_config' => array(
+                    'image_model' => 'gpt-image-1-mini',
+                    'image_quality' => 'low',
+                    'source_size' => '1536x1024',
+                    'featured_size' => '1200x675',
+                    'featured_format' => 'png',
+                ),
+                'source' => array(
+                    'type'             => '',
+                    'allow_manual'     => 1,
+                    'allow_draft'      => 1,
+                    'allow_publish'    => 1,
+                    'allow_attachment' => 0,
+                ),
+                'apply' => array(
+                    'target'   => 'post',
+                    'mappings' => array(),
+                ),
+            ),
+            'max_input_chars'      => 3000,
+            'max_output_tokens'    => 400,
+            'daily_run_limit'      => 15,
+            'log_inputs'           => 1,
+            'log_outputs'          => 1,
+            'sort_order'           => 15,
         );
     }
 }

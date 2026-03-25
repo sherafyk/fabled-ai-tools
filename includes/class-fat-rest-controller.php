@@ -63,6 +63,10 @@ class FAT_REST_Controller {
                         'required'          => false,
                         'sanitize_callback' => 'absint',
                     ),
+                    'image_attachment_id' => array(
+                        'required'          => false,
+                        'sanitize_callback' => 'absint',
+                    ),
                     'outputs'     => array(
                         'required' => true,
                     ),
@@ -111,12 +115,12 @@ class FAT_REST_Controller {
     }
 
     public function apply_outputs( WP_REST_Request $request ) {
-        error_log( 'FAT APPLY REST: raw body=' . (string) $request->get_body() );
         $tool_id      = absint( $request->get_param( 'tool_id' ) );
         $target_type  = sanitize_key( $request->get_param( 'target_type' ) );
         $target_id    = absint( $request->get_param( 'target_id' ) );
         $post_id      = absint( $request->get_param( 'post_id' ) );
         $attachment_id = absint( $request->get_param( 'attachment_id' ) );
+        $image_attachment_id = absint( $request->get_param( 'image_attachment_id' ) );
         $outputs      = $request->get_param( 'outputs' );
         $apply_fields = $request->get_param( 'apply_fields' );
 
@@ -131,6 +135,9 @@ class FAT_REST_Controller {
 
         $outputs      = is_array( $outputs ) ? $outputs : array();
         $apply_fields = is_array( $apply_fields ) ? $apply_fields : array();
+        if ( $image_attachment_id > 0 ) {
+            $outputs['__fat_featured_attachment_id'] = (string) $image_attachment_id;
+        }
 
         $result = $this->tool_runner->apply_generated_outputs(
             $tool_id,
