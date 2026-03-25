@@ -257,12 +257,19 @@ class FAT_Tool_Runner {
             return new WP_Error( 'fat_tool_forbidden', __( 'You are not allowed to apply outputs for this tool.', 'fabled-ai-tools' ), array( 'status' => 403 ) );
         }
 
-        if ( in_array( $this->tool_workflow_type( $tool ), array( 'featured_image_generator', 'uploaded_image_processor' ), true ) ) {
+        $workflow = $this->tool_workflow_type( $tool );
+        if ( in_array( $workflow, array( 'featured_image_generator', 'uploaded_image_processor' ), true ) ) {
             $attachment_id = absint( FAT_Helpers::array_get( $outputs, '__fat_featured_attachment_id', 0 ) );
             if ( $attachment_id <= 0 ) {
                 $attachment_id = absint( FAT_Helpers::array_get( $outputs, 'attachment_id', 0 ) );
             }
-            return $this->featured_image_generator->apply_featured_image( $target_id, $attachment_id );
+            $apply_result = $this->featured_image_generator->apply_featured_image( $target_id, $attachment_id );
+
+            if ( 'uploaded_image_processor' === $workflow ) {
+                $this->log_uploaded_image_apply( $tool, $user, $target_id, $attachment_id, $apply_result );
+            }
+
+            return $apply_result;
         }
 
         if ( ! in_array( $target_type, array( 'post', 'attachment' ), true ) || $target_id <= 0 ) {
@@ -650,6 +657,41 @@ class FAT_Tool_Runner {
         $value = strtolower( sanitize_text_field( (string) $value ) );
         $value = preg_replace( '/[^a-z0-9_:\-]/', '', $value );
         return is_string( $value ) ? trim( $value ) : '';
+    }
+
+    protected function log_uploaded_image_apply( $tool, $user, $post_id, $attachment_id, $apply_result ) {
+        $request_payload = array(
+            'target_post_id' => absint( $post_id ),
+            'attachment_id'  => absint( $attachment_id ),
+            'action'         => 'apply_featured_image',
+        );
+
+        if ( is_wp_error( $apply_result ) ) {
+            $this->log_run(
+                $tool,
+                $user,
+                array(
+                    'status'          => 'error',
+                    'request_preview' => sprintf( 'Apply uploaded image %d to post %d', absint( $attachment_id ), absint( $post_id ) ),
+                    'request_payload' => ! empty( $tool['log_inputs'] ) ? $request_payload : null,
+                    'response_payload'=> ! empty( $tool['log_outputs'] ) ? $apply_result->get_error_data() : null,
+                    'error_message'   => $apply_result->get_error_message(),
+                )
+            );
+            return;
+        }
+
+        $this->log_run(
+            $tool,
+            $user,
+            array(
+                'status'           => 'success',
+                'request_preview'  => sprintf( 'Apply uploaded image %d to post %d', absint( $attachment_id ), absint( $post_id ) ),
+                'response_preview' => sprintf( 'Applied featured image %d to post %d', absint( $attachment_id ), absint( $post_id ) ),
+                'request_payload'  => ! empty( $tool['log_inputs'] ) ? $request_payload : null,
+                'response_payload' => ! empty( $tool['log_outputs'] ) ? $apply_result : null,
+            )
+        );
     }
 
 

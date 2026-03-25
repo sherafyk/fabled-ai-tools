@@ -6,6 +6,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 class FAT_Uploaded_Image_Processor {
     protected $client;
+    const DEFAULT_MAX_UPLOAD_BYTES = 10485760; // 10 MB.
 
     public function __construct( FAT_OpenAI_Client $client ) {
         $this->client = $client;
@@ -32,10 +33,24 @@ class FAT_Uploaded_Image_Processor {
             return new WP_Error( 'fat_missing_uploaded_image', __( 'An uploaded image file is required.', 'fabled-ai-tools' ), array( 'status' => 400 ) );
         }
 
+        $diagnostics = array(
+            'file'       => $this->uploaded_file_preview( $uploaded_file ),
+            'validation' => array( 'status' => 'pending' ),
+            'processing' => array( 'status' => 'pending' ),
+            'media_save' => array( 'status' => 'pending' ),
+            'metadata'   => array( 'status' => 'pending' ),
+        );
+
         $prepared_upload = $this->validate_and_move_uploaded_image( $uploaded_file );
         if ( is_wp_error( $prepared_upload ) ) {
             return $prepared_upload;
         }
+        $diagnostics['validation'] = array(
+            'status'   => 'success',
+            'mime'     => (string) FAT_Helpers::array_get( $prepared_upload, 'type', '' ),
+            'size'     => (int) FAT_Helpers::array_get( $prepared_upload, '__fat_size', 0 ),
+            'max_size' => $this->max_upload_size_bytes(),
+        );
 
         $source_path = (string) FAT_Helpers::array_get( $prepared_upload, 'file', '' );
         $source_url  = (string) FAT_Helpers::array_get( $prepared_upload, 'url', '' );
@@ -44,15 +59,37 @@ class FAT_Uploaded_Image_Processor {
         if ( is_wp_error( $processed ) ) {
             return $processed;
         }
+        $diagnostics['processing'] = array(
+            'status' => 'success',
+            'path'   => (string) FAT_Helpers::array_get( $processed, 'path', '' ),
+            'mime'   => (string) FAT_Helpers::array_get( $processed, 'mime-type', 'image/webp' ),
+            'width'  => (int) FAT_Helpers::array_get( $processed, 'width', 0 ),
+            'height' => (int) FAT_Helpers::array_get( $processed, 'height', 0 ),
+        );
 
         $attachment_id = $this->save_processed_attachment( $processed['path'], (string) FAT_Helpers::array_get( $uploaded_file, 'name', '' ) );
         if ( is_wp_error( $attachment_id ) ) {
             return $attachment_id;
         }
+        $diagnostics['media_save'] = array(
+            'status'        => 'success',
+            'attachment_id' => (int) $attachment_id,
+        );
 
+        $warnings = array();
         $metadata = $this->generate_image_metadata_for_attachment( $processed['path'], FAT_Helpers::array_get( $inputs, 'prompt', '' ) );
         if ( is_wp_error( $metadata ) ) {
-            return $metadata;
+            $warnings[]             = $metadata->get_error_message();
+            $diagnostics['metadata'] = array(
+                'status'  => 'fallback',
+                'message' => $metadata->get_error_message(),
+            );
+            $metadata = $this->build_fallback_metadata( (string) FAT_Helpers::array_get( $uploaded_file, 'name', '' ) );
+        } else {
+            $diagnostics['metadata'] = array(
+                'status'     => 'success',
+                'request_id' => (string) FAT_Helpers::array_get( FAT_Helpers::array_get( $metadata, '__meta', array() ), 'request_id', '' ),
+            );
         }
 
         $persisted = $this->persist_attachment_metadata( $attachment_id, $metadata );
@@ -65,7 +102,6 @@ class FAT_Uploaded_Image_Processor {
             'processed_size'    => $target_size,
             'processed_format'  => $target_format,
             'source_upload_url' => $source_url,
-            'source_upload_path'=> $source_path,
             'attachment_id'     => $attachment_id,
             'title'             => (string) FAT_Helpers::array_get( $metadata, 'title', '' ),
             'alt_text'          => (string) FAT_Helpers::array_get( $metadata, 'alt_text', '' ),
@@ -75,6 +111,8 @@ class FAT_Uploaded_Image_Processor {
                 'metadata' => (string) FAT_Helpers::array_get( FAT_Helpers::array_get( $metadata, '__meta', array() ), 'request_id', '' ),
             ),
             'usage'             => FAT_Helpers::array_get( FAT_Helpers::array_get( $metadata, '__meta', array() ), 'usage', array() ),
+            'warnings'          => $warnings,
+            'diagnostics'       => $diagnostics,
         );
     }
 
@@ -87,6 +125,28 @@ class FAT_Uploaded_Image_Processor {
 
         if ( empty( $uploaded_file['tmp_name'] ) || ! is_uploaded_file( $uploaded_file['tmp_name'] ) ) {
             return new WP_Error( 'fat_upload_invalid_source', __( 'Invalid uploaded file source.', 'fabled-ai-tools' ), array( 'status' => 400 ) );
+        }
+        if ( empty( $uploaded_file['name'] ) ) {
+            return new WP_Error( 'fat_upload_missing_name', __( 'Uploaded image filename is missing.', 'fabled-ai-tools' ), array( 'status' => 400 ) );
+        }
+
+        $file_size = isset( $uploaded_file['size'] ) ? (int) $uploaded_file['size'] : 0;
+        if ( $file_size <= 0 ) {
+            return new WP_Error( 'fat_upload_invalid_size', __( 'Uploaded image size is invalid.', 'fabled-ai-tools' ), array( 'status' => 400 ) );
+        }
+
+        $max_size = $this->max_upload_size_bytes();
+        if ( $file_size > $max_size ) {
+            return new WP_Error( 'fat_upload_too_large', __( 'Uploaded image exceeds the maximum allowed size.', 'fabled-ai-tools' ), array( 'status' => 400, 'max_size' => $max_size ) );
+        }
+
+        $sniffed = wp_check_filetype_and_ext( $uploaded_file['tmp_name'], $uploaded_file['name'] );
+        $mime    = (string) FAT_Helpers::array_get( $sniffed, 'type', '' );
+        if ( '' === $mime || ! in_array( $mime, array_values( $this->allowed_image_mimes() ), true ) ) {
+            return new WP_Error( 'fat_upload_invalid_type', __( 'Unsupported image type uploaded.', 'fabled-ai-tools' ), array( 'status' => 400 ) );
+        }
+        if ( false === getimagesize( $uploaded_file['tmp_name'] ) ) {
+            return new WP_Error( 'fat_upload_not_image', __( 'Uploaded file is not a valid image.', 'fabled-ai-tools' ), array( 'status' => 400 ) );
         }
 
         $overrides = array(
@@ -103,6 +163,7 @@ class FAT_Uploaded_Image_Processor {
         if ( ! in_array( $type, array_values( $this->allowed_image_mimes() ), true ) ) {
             return new WP_Error( 'fat_upload_invalid_type', __( 'Unsupported image type uploaded.', 'fabled-ai-tools' ), array( 'status' => 400 ) );
         }
+        $moved['__fat_size'] = file_exists( FAT_Helpers::array_get( $moved, 'file', '' ) ) ? (int) filesize( FAT_Helpers::array_get( $moved, 'file', '' ) ) : 0;
 
         return $moved;
     }
@@ -127,6 +188,9 @@ class FAT_Uploaded_Image_Processor {
 
         if ( is_wp_error( $saved ) ) {
             return new WP_Error( 'fat_uploaded_save_failed', $saved->get_error_message(), array( 'status' => 500 ) );
+        }
+        if ( empty( $saved['path'] ) || ! file_exists( $saved['path'] ) ) {
+            return new WP_Error( 'fat_uploaded_save_missing_file', __( 'Processed image file is missing after save.', 'fabled-ai-tools' ), array( 'status' => 500 ) );
         }
 
         return $saved;
@@ -241,5 +305,41 @@ class FAT_Uploaded_Image_Processor {
         }
 
         return sanitize_text_field( $base );
+    }
+
+    protected function max_upload_size_bytes() {
+        $wp_limit = (int) wp_max_upload_size();
+        $default  = self::DEFAULT_MAX_UPLOAD_BYTES;
+        $limit    = (int) apply_filters( 'fat_uploaded_image_max_bytes', $default );
+        $limit    = $limit > 0 ? $limit : $default;
+
+        if ( $wp_limit > 0 ) {
+            $limit = min( $limit, $wp_limit );
+        }
+
+        return max( 1, $limit );
+    }
+
+    protected function build_fallback_metadata( $filename ) {
+        $title = $this->default_title_from_filename( $filename );
+
+        return array(
+            'title'       => $title,
+            'alt_text'    => $title,
+            'description' => '',
+            '__meta'      => array(
+                'request_id' => '',
+                'usage'      => array(),
+            ),
+        );
+    }
+
+    protected function uploaded_file_preview( $uploaded_file ) {
+        return array(
+            'name'  => sanitize_file_name( (string) FAT_Helpers::array_get( $uploaded_file, 'name', '' ) ),
+            'type'  => sanitize_text_field( (string) FAT_Helpers::array_get( $uploaded_file, 'type', '' ) ),
+            'size'  => (int) FAT_Helpers::array_get( $uploaded_file, 'size', 0 ),
+            'error' => isset( $uploaded_file['error'] ) ? (int) $uploaded_file['error'] : null,
+        );
     }
 }
