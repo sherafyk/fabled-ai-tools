@@ -11,14 +11,16 @@ class FAT_Admin {
     protected $validator;
     protected $prompt_engine;
     protected $tool_runner;
+    protected $entity_query_service;
 
-    public function __construct( FAT_Settings $settings, FAT_Tools_Repository $tools_repo, FAT_Runs_Repository $runs_repo, FAT_Tool_Validator $validator, FAT_Prompt_Engine $prompt_engine, FAT_Tool_Runner $tool_runner ) {
+    public function __construct( FAT_Settings $settings, FAT_Tools_Repository $tools_repo, FAT_Runs_Repository $runs_repo, FAT_Tool_Validator $validator, FAT_Prompt_Engine $prompt_engine, FAT_Tool_Runner $tool_runner, FAT_Entity_Query_Service $entity_query_service ) {
         $this->settings      = $settings;
         $this->tools_repo    = $tools_repo;
         $this->runs_repo     = $runs_repo;
         $this->validator     = $validator;
         $this->prompt_engine = $prompt_engine;
         $this->tool_runner   = $tool_runner;
+        $this->entity_query_service = $entity_query_service;
     }
 
     public function hooks() {
@@ -883,28 +885,7 @@ class FAT_Admin {
             );
         }
 
-        $query = new WP_Query(
-            array(
-                'post_type'              => 'post',
-                'post_status'            => $status,
-                'posts_per_page'         => 40,
-                'orderby'                => 'modified',
-                'order'                  => 'DESC',
-                'ignore_sticky_posts'    => true,
-                'no_found_rows'          => true,
-                'update_post_meta_cache' => false,
-                'update_post_term_cache' => false,
-                'fields'                 => 'ids',
-            )
-        );
-
-        $posts = array();
-        foreach ( $query->posts as $post_id ) {
-            $posts[] = array(
-                'id'    => (int) $post_id,
-                'title' => html_entity_decode( get_the_title( $post_id ), ENT_QUOTES, get_bloginfo( 'charset' ) ),
-            );
-        }
+        $posts = $this->entity_query_service->get_editable_posts_for_runner( $status, wp_get_current_user(), 40 );
 
         wp_send_json_success(
             array(
@@ -925,31 +906,7 @@ class FAT_Admin {
 
         check_ajax_referer( 'fat_runner_posts', 'nonce' );
 
-        $query = new WP_Query(
-            array(
-                'post_type'              => 'attachment',
-                'post_status'            => 'inherit',
-                'post_mime_type'         => 'image',
-                'posts_per_page'         => 40,
-                'orderby'                => 'modified',
-                'order'                  => 'DESC',
-                'no_found_rows'          => true,
-                'update_post_meta_cache' => false,
-                'update_post_term_cache' => false,
-                'fields'                 => 'ids',
-            )
-        );
-
-        $attachments = array();
-        foreach ( $query->posts as $attachment_id ) {
-            $attachment_id  = (int) $attachment_id;
-            $attached_file  = get_attached_file( $attachment_id );
-            $attachments[] = array(
-                'id'       => $attachment_id,
-                'title'    => html_entity_decode( get_the_title( $attachment_id ), ENT_QUOTES, get_bloginfo( 'charset' ) ),
-                'filename' => $attached_file ? wp_basename( $attached_file ) : '',
-            );
-        }
+        $attachments = $this->entity_query_service->get_editable_attachments_for_runner( wp_get_current_user(), 40 );
 
         wp_send_json_success(
             array(

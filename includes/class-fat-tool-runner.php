@@ -102,7 +102,7 @@ class FAT_Tool_Runner {
 
         $workflow = $this->tool_workflow_type( $tool );
 
-        $resolved_inputs = $this->resolve_contextual_inputs( $tool, $raw_inputs );
+        $resolved_inputs = $this->resolve_contextual_inputs( $tool, $raw_inputs, $user );
         if ( is_wp_error( $resolved_inputs ) ) {
             return $resolved_inputs;
         }
@@ -263,7 +263,7 @@ class FAT_Tool_Runner {
             if ( $attachment_id <= 0 ) {
                 $attachment_id = absint( FAT_Helpers::array_get( $outputs, 'attachment_id', 0 ) );
             }
-            $apply_result = $this->featured_image_generator->apply_featured_image( $target_id, $attachment_id );
+            $apply_result = $this->featured_image_generator->apply_featured_image( $target_id, $attachment_id, $user );
 
             if ( 'uploaded_image_processor' === $workflow ) {
                 $this->log_uploaded_image_apply( $tool, $user, $target_id, $attachment_id, $apply_result );
@@ -324,7 +324,7 @@ class FAT_Tool_Runner {
             return new WP_Error( 'fat_target_type_mismatch', __( 'Target is not an attachment.', 'fabled-ai-tools' ), array( 'status' => 400 ) );
         }
 
-        if ( ! current_user_can( 'edit_post', $target_id ) ) {
+        if ( ! user_can( $user, 'edit_post', $target_id ) ) {
             return new WP_Error( 'fat_target_forbidden', __( 'You are not allowed to edit this target.', 'fabled-ai-tools' ), array( 'status' => 403 ) );
         }
 
@@ -410,15 +410,16 @@ class FAT_Tool_Runner {
         return wp_get_current_user();
     }
 
-    protected function resolve_contextual_inputs( $tool, $raw_inputs ) {
+    protected function resolve_contextual_inputs( $tool, $raw_inputs, $user = null ) {
         $inputs = is_array( $raw_inputs ) ? $raw_inputs : array();
+        $user   = $this->normalize_user( $user );
 
-        $inputs = $this->resolve_inputs_from_selected_post( $tool, $inputs );
+        $inputs = $this->resolve_inputs_from_selected_post( $tool, $inputs, $user );
         if ( is_wp_error( $inputs ) ) {
             return $inputs;
         }
 
-        $inputs = $this->resolve_inputs_from_selected_attachment( $tool, $inputs );
+        $inputs = $this->resolve_inputs_from_selected_attachment( $tool, $inputs, $user );
         if ( is_wp_error( $inputs ) ) {
             return $inputs;
         }
@@ -426,8 +427,9 @@ class FAT_Tool_Runner {
         return $inputs;
     }
 
-    protected function resolve_inputs_from_selected_post( $tool, $raw_inputs ) {
+    protected function resolve_inputs_from_selected_post( $tool, $raw_inputs, $user = null ) {
         $inputs = is_array( $raw_inputs ) ? $raw_inputs : array();
+        $user   = $this->normalize_user( $user );
 
         if ( ! $this->tool_has_input_key( $tool, 'article_body' ) ) {
             return $inputs;
@@ -446,6 +448,10 @@ class FAT_Tool_Runner {
         $post = get_post( $post_id );
         if ( ! $post || 'post' !== $post->post_type ) {
             return new WP_Error( 'fat_invalid_inputs', __( 'Selected post could not be found.', 'fabled-ai-tools' ), array( 'status' => 400 ) );
+        }
+
+        if ( ! $user || ! $user->exists() || ! user_can( $user, 'edit_post', $post_id ) ) {
+            return new WP_Error( 'fat_invalid_inputs', __( 'You are not allowed to use the selected post.', 'fabled-ai-tools' ), array( 'status' => 403 ) );
         }
 
         $status = get_post_status( $post );
@@ -469,8 +475,9 @@ class FAT_Tool_Runner {
         return $inputs;
     }
 
-    protected function resolve_inputs_from_selected_attachment( $tool, $raw_inputs ) {
+    protected function resolve_inputs_from_selected_attachment( $tool, $raw_inputs, $user = null ) {
         $inputs = is_array( $raw_inputs ) ? $raw_inputs : array();
+        $user   = $this->normalize_user( $user );
 
         $attachment_id = absint( FAT_Helpers::array_get( $inputs, '__fat_attachment_id', 0 ) );
         if ( $attachment_id <= 0 ) {
@@ -482,7 +489,7 @@ class FAT_Tool_Runner {
             return new WP_Error( 'fat_invalid_inputs', __( 'Selected attachment could not be found.', 'fabled-ai-tools' ), array( 'status' => 400 ) );
         }
 
-        if ( ! current_user_can( 'edit_post', $attachment_id ) ) {
+        if ( ! $user || ! $user->exists() || ! user_can( $user, 'edit_post', $attachment_id ) ) {
             return new WP_Error( 'fat_invalid_inputs', __( 'You are not allowed to use the selected attachment.', 'fabled-ai-tools' ), array( 'status' => 403 ) );
         }
 
