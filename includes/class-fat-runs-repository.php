@@ -138,6 +138,30 @@ class FAT_Runs_Repository {
         return $row ? $this->map_row( $row ) : null;
     }
 
+
+    public function delete_older_than_days( $days ) {
+        global $wpdb;
+
+        $days = absint( $days );
+        if ( $days <= 0 ) {
+            return 0;
+        }
+
+        $cutoff = gmdate( 'Y-m-d H:i:s', time() - ( DAY_IN_SECONDS * $days ) );
+
+        return (int) $wpdb->query(
+            $wpdb->prepare(
+                "DELETE FROM {$this->table} WHERE created_at < %s",
+                $cutoff
+            )
+        );
+    }
+
+    public function delete_all() {
+        global $wpdb;
+
+        return (int) $wpdb->query( "DELETE FROM {$this->table}" );
+    }
     protected function maybe_json_encode( $value ) {
         if ( null === $value || '' === $value ) {
             return null;

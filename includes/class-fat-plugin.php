@@ -44,7 +44,7 @@ class FAT_Plugin {
         $this->uploaded_image_processor = new FAT_Uploaded_Image_Processor( $this->client );
         $this->tool_runner     = new FAT_Tool_Runner( $this->tools_repo, $this->runs_repo, $this->settings, $this->prompt_engine, $this->client, $this->usage_limiter, $this->featured_image_generator, $this->uploaded_image_processor );
         $this->rest_controller = new FAT_REST_Controller( $this->tool_runner );
-        $this->admin           = new FAT_Admin( $this->settings, $this->tools_repo, $this->runs_repo, $this->validator, $this->prompt_engine, $this->tool_runner, $this->entity_query_service );
+        $this->admin           = new FAT_Admin( $this->settings, $this->tools_repo, $this->runs_repo, $this->validator, $this->prompt_engine, $this->tool_runner, $this->client, $this->entity_query_service );
 
         $this->settings->hooks();
         $this->rest_controller->hooks();

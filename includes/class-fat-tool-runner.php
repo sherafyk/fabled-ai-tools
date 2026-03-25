@@ -100,6 +100,10 @@ class FAT_Tool_Runner {
             return new WP_Error( 'fat_tool_forbidden', __( 'You are not allowed to run this tool.', 'fabled-ai-tools' ), array( 'status' => 403 ) );
         }
 
+        if ( ! $this->settings->is_execution_enabled() ) {
+            return new WP_Error( 'fat_execution_paused', __( 'Fabled AI Tools is currently paused by an administrator.', 'fabled-ai-tools' ), array( 'status' => 503 ) );
+        }
+
         $workflow = $this->tool_workflow_type( $tool );
 
         $resolved_inputs = $this->resolve_contextual_inputs( $tool, $raw_inputs, $user );
@@ -206,6 +210,7 @@ class FAT_Tool_Runner {
         }
 
         $outputs = $validated_outputs['outputs'];
+        $outputs['__fat_openai_request_id'] = (string) FAT_Helpers::array_get( $response, 'request_id', '' );
 
         $this->log_run(
             $tool,
@@ -257,6 +262,10 @@ class FAT_Tool_Runner {
             return new WP_Error( 'fat_tool_forbidden', __( 'You are not allowed to apply outputs for this tool.', 'fabled-ai-tools' ), array( 'status' => 403 ) );
         }
 
+        if ( ! $this->settings->is_execution_enabled() ) {
+            return new WP_Error( 'fat_execution_paused', __( 'Fabled AI Tools is currently paused by an administrator.', 'fabled-ai-tools' ), array( 'status' => 503 ) );
+        }
+
         $workflow = $this->tool_workflow_type( $tool );
         if ( in_array( $workflow, array( 'featured_image_generator', 'uploaded_image_processor' ), true ) ) {
             $attachment_id = absint( FAT_Helpers::array_get( $outputs, '__fat_featured_attachment_id', 0 ) );
@@ -265,9 +274,20 @@ class FAT_Tool_Runner {
             }
             $apply_result = $this->featured_image_generator->apply_featured_image( $target_id, $attachment_id, $user );
 
-            if ( 'uploaded_image_processor' === $workflow ) {
-                $this->log_uploaded_image_apply( $tool, $user, $target_id, $attachment_id, $apply_result );
-            }
+            $this->log_apply_action(
+                $tool,
+                $user,
+                'post',
+                $target_id,
+                array( 'featured_image' ),
+                $outputs,
+                $apply_result,
+                array(
+                    'workflow'      => $workflow,
+                    'attachment_id' => $attachment_id,
+                    'action'        => 'apply_featured_image',
+                )
+            );
 
             return $apply_result;
         }
@@ -362,16 +382,22 @@ class FAT_Tool_Runner {
         if ( count( $update_post_data ) > 1 ) {
             $updated_post_id = wp_update_post( wp_slash( $update_post_data ), true );
             if ( is_wp_error( $updated_post_id ) ) {
-                return new WP_Error( 'fat_apply_failed', $updated_post_id->get_error_message(), array( 'status' => 500 ) );
+                $apply_error = new WP_Error( 'fat_apply_failed', $updated_post_id->get_error_message(), array( 'status' => 500 ) );
+                $this->log_apply_action( $tool, $user, $target_type, $target_id, array_keys( $selected_mappings ), $outputs, $apply_error, array( 'action' => 'apply_outputs' ) );
+                return $apply_error;
             }
         }
 
-        return array(
+        $result = array(
             'tool_id'        => $tool_id,
             'target_type'    => $target_type,
             'target_id'      => $target_id,
             'updated_fields' => array_values( array_unique( $updated_fields ) ),
         );
+
+        $this->log_apply_action( $tool, $user, $target_type, $target_id, array_keys( $selected_mappings ), $outputs, $result, array( 'action' => 'apply_outputs' ) );
+
+        return $result;
     }
 
     protected function log_run( $tool, $user, $data ) {
@@ -666,11 +692,18 @@ class FAT_Tool_Runner {
         return is_string( $value ) ? trim( $value ) : '';
     }
 
-    protected function log_uploaded_image_apply( $tool, $user, $post_id, $attachment_id, $apply_result ) {
-        $request_payload = array(
-            'target_post_id' => absint( $post_id ),
-            'attachment_id'  => absint( $attachment_id ),
-            'action'         => 'apply_featured_image',
+
+    protected function log_apply_action( $tool, $user, $target_type, $target_id, $apply_fields, $outputs, $apply_result, $extra = array() ) {
+        $openai_request_id = $this->extract_openai_request_id_from_outputs( $outputs );
+        $request_payload   = wp_parse_args(
+            (array) $extra,
+            array(
+                'action'           => 'apply_outputs',
+                'target_type'      => sanitize_key( $target_type ),
+                'target_id'        => absint( $target_id ),
+                'apply_fields'     => array_values( array_map( array( $this, 'sanitize_apply_field_identifier' ), (array) $apply_fields ) ),
+                'openai_request_id'=> $openai_request_id,
+            )
         );
 
         if ( is_wp_error( $apply_result ) ) {
@@ -678,11 +711,12 @@ class FAT_Tool_Runner {
                 $tool,
                 $user,
                 array(
-                    'status'          => 'error',
-                    'request_preview' => sprintf( 'Apply uploaded image %d to post %d', absint( $attachment_id ), absint( $post_id ) ),
-                    'request_payload' => ! empty( $tool['log_inputs'] ) ? $request_payload : null,
-                    'response_payload'=> ! empty( $tool['log_outputs'] ) ? $apply_result->get_error_data() : null,
-                    'error_message'   => $apply_result->get_error_message(),
+                    'status'            => 'error',
+                    'request_preview'   => sprintf( 'Apply to %s #%d', sanitize_key( $target_type ), absint( $target_id ) ),
+                    'request_payload'   => ! empty( $tool['log_inputs'] ) ? $request_payload : null,
+                    'response_payload'  => ! empty( $tool['log_outputs'] ) ? $apply_result->get_error_data() : null,
+                    'error_message'     => $apply_result->get_error_message(),
+                    'openai_request_id' => $openai_request_id,
                 )
             );
             return;
@@ -692,15 +726,20 @@ class FAT_Tool_Runner {
             $tool,
             $user,
             array(
-                'status'           => 'success',
-                'request_preview'  => sprintf( 'Apply uploaded image %d to post %d', absint( $attachment_id ), absint( $post_id ) ),
-                'response_preview' => sprintf( 'Applied featured image %d to post %d', absint( $attachment_id ), absint( $post_id ) ),
-                'request_payload'  => ! empty( $tool['log_inputs'] ) ? $request_payload : null,
-                'response_payload' => ! empty( $tool['log_outputs'] ) ? $apply_result : null,
+                'status'            => 'success',
+                'request_preview'   => sprintf( 'Apply to %s #%d', sanitize_key( $target_type ), absint( $target_id ) ),
+                'response_preview'  => 'Updated fields: ' . implode( ', ', (array) FAT_Helpers::array_get( $apply_result, 'updated_fields', (array) $apply_fields ) ),
+                'request_payload'   => ! empty( $tool['log_inputs'] ) ? $request_payload : null,
+                'response_payload'  => ! empty( $tool['log_outputs'] ) ? $apply_result : null,
+                'openai_request_id' => $openai_request_id,
             )
         );
     }
 
+    protected function extract_openai_request_id_from_outputs( $outputs ) {
+        $request_id = (string) FAT_Helpers::array_get( $outputs, '__fat_openai_request_id', '' );
+        return sanitize_text_field( $request_id );
+    }
 
     protected function execute_uploaded_image_workflow( $tool, $inputs, $user ) {
         $request_start = microtime( true );
@@ -738,6 +777,7 @@ class FAT_Tool_Runner {
             'description' => (string) FAT_Helpers::array_get( $result, 'description', '' ),
             'attachment_id' => (string) FAT_Helpers::array_get( $result, 'attachment_id', 0 ),
             '__fat_featured_attachment_id' => (string) FAT_Helpers::array_get( $result, 'attachment_id', 0 ),
+            '__fat_openai_request_id' => (string) FAT_Helpers::array_get( FAT_Helpers::array_get( $result, 'request_ids', array() ), 'metadata', '' ),
         );
 
         $this->log_run(
@@ -809,6 +849,7 @@ class FAT_Tool_Runner {
             'alt_text'    => (string) FAT_Helpers::array_get( $result, 'alt_text', '' ),
             'description' => (string) FAT_Helpers::array_get( $result, 'description', '' ),
             '__fat_featured_attachment_id' => (string) FAT_Helpers::array_get( $result, 'featured_attachment_id', 0 ),
+            '__fat_openai_request_id' => (string) FAT_Helpers::array_get( FAT_Helpers::array_get( $result, 'request_ids', array() ), 'image', '' ),
         );
 
         $this->log_run(

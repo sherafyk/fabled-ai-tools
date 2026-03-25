@@ -11,15 +11,17 @@ class FAT_Admin {
     protected $validator;
     protected $prompt_engine;
     protected $tool_runner;
+    protected $client;
     protected $entity_query_service;
 
-    public function __construct( FAT_Settings $settings, FAT_Tools_Repository $tools_repo, FAT_Runs_Repository $runs_repo, FAT_Tool_Validator $validator, FAT_Prompt_Engine $prompt_engine, FAT_Tool_Runner $tool_runner, FAT_Entity_Query_Service $entity_query_service ) {
+    public function __construct( FAT_Settings $settings, FAT_Tools_Repository $tools_repo, FAT_Runs_Repository $runs_repo, FAT_Tool_Validator $validator, FAT_Prompt_Engine $prompt_engine, FAT_Tool_Runner $tool_runner, FAT_OpenAI_Client $client, FAT_Entity_Query_Service $entity_query_service ) {
         $this->settings      = $settings;
         $this->tools_repo    = $tools_repo;
         $this->runs_repo     = $runs_repo;
         $this->validator     = $validator;
         $this->prompt_engine = $prompt_engine;
         $this->tool_runner   = $tool_runner;
+        $this->client        = $client;
         $this->entity_query_service = $entity_query_service;
     }
 
@@ -29,6 +31,8 @@ class FAT_Admin {
         add_action( 'admin_notices', array( $this, 'render_admin_notices' ) );
         add_action( 'admin_post_fat_save_tool', array( $this, 'handle_save_tool' ) );
         add_action( 'admin_post_fat_tool_action', array( $this, 'handle_tool_action' ) );
+        add_action( 'admin_post_fat_test_openai_connection', array( $this, 'handle_test_openai_connection' ) );
+        add_action( 'admin_post_fat_purge_logs', array( $this, 'handle_purge_logs' ) );
         add_action( 'wp_ajax_fat_runner_posts', array( $this, 'handle_runner_posts_lookup' ) );
         add_action( 'wp_ajax_fat_runner_attachments', array( $this, 'handle_runner_attachments_lookup' ) );
     }
@@ -325,6 +329,10 @@ class FAT_Admin {
         <div class="wrap fat-wrap">
             <h1><?php esc_html_e( 'Fabled AI Tools', 'fabled-ai-tools' ); ?></h1>
             <p><?php esc_html_e( 'Select a tool, fill in the required inputs, and run it. Prompts and API keys stay server-side.', 'fabled-ai-tools' ); ?></p>
+
+            <?php if ( ! $this->settings->is_execution_enabled() ) : ?>
+                <div class="notice notice-warning inline"><p><?php esc_html_e( 'Runner execution is currently paused in Settings.', 'fabled-ai-tools' ); ?></p></div>
+            <?php endif; ?>
 
             <?php if ( ! $this->settings->has_api_key() ) : ?>
                 <div class="notice notice-warning"><p><?php echo wp_kses_post( sprintf( __( 'No OpenAI API key is configured yet. Set one on the <a href="%s">Settings</a> page.', 'fabled-ai-tools' ), esc_url( admin_url( 'admin.php?page=fat-settings' ) ) ) ); ?></p></div>
@@ -755,6 +763,7 @@ class FAT_Admin {
                         <tr><th><?php esc_html_e( 'Model', 'fabled-ai-tools' ); ?></th><td><?php echo esc_html( $selected_run['model_used'] ); ?></td></tr>
                         <tr><th><?php esc_html_e( 'Latency', 'fabled-ai-tools' ); ?></th><td><?php echo esc_html( (string) $selected_run['latency_ms'] ); ?> ms</td></tr>
                         <tr><th><?php esc_html_e( 'Tokens', 'fabled-ai-tools' ); ?></th><td><?php echo esc_html( sprintf( 'in: %s / out: %s / total: %s', (string) $selected_run['prompt_tokens'], (string) $selected_run['completion_tokens'], (string) $selected_run['total_tokens'] ) ); ?></td></tr>
+                        <tr><th><?php esc_html_e( 'OpenAI Request ID', 'fabled-ai-tools' ); ?></th><td><?php echo esc_html( (string) FAT_Helpers::array_get( $selected_run, 'openai_request_id', '' ) ); ?></td></tr>
                         <tr><th><?php esc_html_e( 'Request Preview', 'fabled-ai-tools' ); ?></th><td><pre><?php echo esc_html( $selected_run['request_preview'] ); ?></pre></td></tr>
                         <tr><th><?php esc_html_e( 'Response Preview', 'fabled-ai-tools' ); ?></th><td><pre><?php echo esc_html( $selected_run['response_preview'] ); ?></pre></td></tr>
                         <?php if ( ! empty( $selected_run['error_message'] ) ) : ?>
@@ -851,6 +860,26 @@ class FAT_Admin {
             </div>
 
             <div class="fat-card">
+                <h2><?php esc_html_e( 'Connection Test', 'fabled-ai-tools' ); ?></h2>
+                <p><?php esc_html_e( 'Run a quick authenticated OpenAI check using your current model and timeout settings.', 'fabled-ai-tools' ); ?></p>
+                <form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>">
+                    <?php wp_nonce_field( 'fat_test_openai_connection' ); ?>
+                    <input type="hidden" name="action" value="fat_test_openai_connection" />
+                    <?php submit_button( __( 'Test OpenAI Connection', 'fabled-ai-tools' ), 'secondary', 'submit', false ); ?>
+                </form>
+            </div>
+
+            <div class="fat-card">
+                <h2><?php esc_html_e( 'Log Maintenance', 'fabled-ai-tools' ); ?></h2>
+                <p><?php esc_html_e( 'Use this to manually clear all run logs. Tool definitions remain unchanged.', 'fabled-ai-tools' ); ?></p>
+                <form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" onsubmit="return window.confirm('<?php echo esc_js( __( 'Delete all run logs? This cannot be undone.', 'fabled-ai-tools' ) ); ?>');">
+                    <?php wp_nonce_field( 'fat_purge_logs' ); ?>
+                    <input type="hidden" name="action" value="fat_purge_logs" />
+                    <?php submit_button( __( 'Purge Run Logs', 'fabled-ai-tools' ), 'delete', 'submit', false ); ?>
+                </form>
+            </div>
+
+            <div class="fat-card">
                 <h2><?php esc_html_e( 'Capability Summary', 'fabled-ai-tools' ); ?></h2>
                 <ul>
                     <li><code>fat_run_ai_tools</code> — <?php esc_html_e( 'Can access the runner page and run allowed tools.', 'fabled-ai-tools' ); ?></li>
@@ -861,6 +890,70 @@ class FAT_Admin {
             </div>
         </div>
         <?php
+    }
+
+    public function handle_test_openai_connection() {
+        if ( ! $this->current_user_can_manage_settings() ) {
+            wp_die( esc_html__( 'You are not allowed to manage settings.', 'fabled-ai-tools' ) );
+        }
+
+        check_admin_referer( 'fat_test_openai_connection' );
+
+        $result = $this->client->test_connection(
+            array(
+                'model'   => $this->settings->get( 'default_model', 'gpt-5.4-mini' ),
+                'timeout' => $this->settings->get( 'default_timeout', 45 ),
+            )
+        );
+
+        if ( is_wp_error( $result ) ) {
+            $message = sprintf(
+                /* translators: %s: OpenAI error message */
+                __( 'Connection test failed: %s', 'fabled-ai-tools' ),
+                $result->get_error_message()
+            );
+
+            $request_id = (string) FAT_Helpers::array_get( $result->get_error_data(), 'request_id', '' );
+            if ( '' !== $request_id ) {
+                $message .= ' ' . sprintf(
+                    /* translators: %s: request id */
+                    __( 'Request ID: %s', 'fabled-ai-tools' ),
+                    $request_id
+                );
+            }
+
+            wp_safe_redirect( FAT_Helpers::admin_url_with_notice( 'fat-settings', 'fat_error', $message ) );
+            exit;
+        }
+
+        $message = sprintf(
+            /* translators: 1: model 2: request id 3: latency in milliseconds */
+            __( 'Connection OK. Model: %1$s | Request ID: %2$s | Latency: %3$dms', 'fabled-ai-tools' ),
+            (string) FAT_Helpers::array_get( $result, 'model', '' ),
+            (string) FAT_Helpers::array_get( $result, 'request_id', '' ),
+            (int) FAT_Helpers::array_get( $result, 'latency_ms', 0 )
+        );
+
+        wp_safe_redirect( FAT_Helpers::admin_url_with_notice( 'fat-settings', 'fat_notice', $message ) );
+        exit;
+    }
+
+    public function handle_purge_logs() {
+        if ( ! $this->current_user_can_manage_settings() ) {
+            wp_die( esc_html__( 'You are not allowed to manage settings.', 'fabled-ai-tools' ) );
+        }
+
+        check_admin_referer( 'fat_purge_logs' );
+
+        $deleted = $this->runs_repo->delete_all();
+        $message = sprintf(
+            /* translators: %d: number of logs removed */
+            __( 'Run logs purged. Deleted rows: %d', 'fabled-ai-tools' ),
+            absint( $deleted )
+        );
+
+        wp_safe_redirect( FAT_Helpers::admin_url_with_notice( 'fat-settings', 'fat_notice', $message ) );
+        exit;
     }
 
     public function handle_runner_posts_lookup() {
