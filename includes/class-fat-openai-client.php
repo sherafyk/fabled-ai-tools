@@ -34,13 +34,12 @@ class FAT_OpenAI_Client {
         }
 
         $request_body = array(
-            'model'          => $model,
-            'prompt'         => $prompt,
-            'size'           => $size,
-            'quality'        => $quality,
-            'output_format'  => 'png',
-            'response_format'=> 'b64_json',
-            'n'              => 1,
+            'model'         => $model,
+            'prompt'        => $prompt,
+            'size'          => $size,
+            'quality'       => $quality,
+            'output_format' => 'png',
+            'n'             => 1,
         );
 
         $response = $this->post_json_request( $this->images_endpoint, $request_body, $timeout, $api_key );
