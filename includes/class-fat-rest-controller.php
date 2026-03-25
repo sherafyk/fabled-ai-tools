@@ -87,6 +87,11 @@ class FAT_REST_Controller {
         $inputs  = $request->get_param( 'inputs' );
         $inputs  = is_array( $inputs ) ? $inputs : array();
 
+        $files = $request->get_file_params();
+        if ( isset( $files['uploaded_image'] ) && is_array( $files['uploaded_image'] ) ) {
+            $inputs['__fat_uploaded_image_file'] = $files['uploaded_image'];
+        }
+
         $result = $this->tool_runner->execute( $tool_id, $inputs, get_current_user_id() );
         if ( is_wp_error( $result ) ) {
             $status = 400;

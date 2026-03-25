@@ -13,7 +13,7 @@ class FAT_Tool_Validator {
         $workflow = sanitize_key( FAT_Helpers::array_get( $config, 'workflow', '' ) );
         $workflow_config = (array) FAT_Helpers::array_get( $config, 'workflow_config', array() );
 
-        if ( ! in_array( $workflow, array( '', 'featured_image_generator' ), true ) ) {
+        if ( ! in_array( $workflow, array( '', 'featured_image_generator', 'uploaded_image_processor' ), true ) ) {
             $workflow = '';
         }
 
@@ -64,6 +64,8 @@ class FAT_Tool_Validator {
                 'source_size'     => sanitize_text_field( FAT_Helpers::array_get( $workflow_config, 'source_size', '1536x1024' ) ),
                 'featured_size'   => sanitize_text_field( FAT_Helpers::array_get( $workflow_config, 'featured_size', '1200x675' ) ),
                 'featured_format' => sanitize_text_field( FAT_Helpers::array_get( $workflow_config, 'featured_format', 'png' ) ),
+                'target_size'    => sanitize_text_field( FAT_Helpers::array_get( $workflow_config, 'target_size', '1200x675' ) ),
+                'target_format'  => sanitize_text_field( FAT_Helpers::array_get( $workflow_config, 'target_format', 'webp' ) ),
             ),
             'source' => array(
                 'type'           => $source_type,
@@ -248,7 +250,7 @@ class FAT_Tool_Validator {
         $apply  = (array) FAT_Helpers::array_get( $config, 'apply', array() );
         $workflow = sanitize_key( FAT_Helpers::array_get( $config, 'workflow', '' ) );
 
-        if ( ! in_array( $workflow, array( '', 'featured_image_generator' ), true ) ) {
+        if ( ! in_array( $workflow, array( '', 'featured_image_generator', 'uploaded_image_processor' ), true ) ) {
             $errors[] = __( 'Unsupported workflow value for WordPress integration.', 'fabled-ai-tools' );
         }
 
