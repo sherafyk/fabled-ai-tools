@@ -20,6 +20,9 @@ class FAT_Activator {
     }
 
     public static function maybe_upgrade() {
+        // Keep missing built-ins backfilled even when schema version is unchanged.
+        self::maybe_seed_missing_featured_image_generator();
+
         $installed = get_option( 'fat_db_version', '' );
         if ( FAT_DB_VERSION !== $installed ) {
             self::create_tables();
