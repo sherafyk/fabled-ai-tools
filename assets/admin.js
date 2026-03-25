@@ -229,6 +229,44 @@
             return wpConfig.workflow === 'featured_image_generator';
         }
 
+        function isUploadedImageWorkflow(tool) {
+            const wpConfig = getToolWpConfig(tool);
+            return wpConfig.workflow === 'uploaded_image_processor';
+        }
+
+        function setRunnerBusy(isBusy) {
+            submit.disabled = !!isBusy;
+            const generateApplyButton = document.getElementById('fat-runner-generate-apply');
+            if (generateApplyButton) {
+                generateApplyButton.disabled = !!isBusy;
+            }
+            outputsWrap.querySelectorAll('.fat-apply-button').forEach(function (button) {
+                if (isBusy) {
+                    button.dataset.wasDisabled = button.disabled ? '1' : '0';
+                    button.disabled = true;
+                    return;
+                }
+                button.disabled = button.dataset.wasDisabled === '1';
+            });
+        }
+
+        function createStagedStatusUpdater(messages) {
+            const timers = [];
+            (messages || []).forEach(function (entry) {
+                const delay = parseInt(entry.delay || 0, 10);
+                const message = entry.message || '';
+                timers.push(window.setTimeout(function () {
+                    setStatus(message, 'loading');
+                }, Math.max(delay, 0)));
+            });
+
+            return function stopUpdater() {
+                timers.forEach(function (timerId) {
+                    window.clearTimeout(timerId);
+                });
+            };
+        }
+
         async function loadPostsForStatus(status) {
             if (postCache[status]) {
                 return postCache[status];
@@ -490,7 +528,7 @@
 
             actionRow.innerHTML = '';
 
-            submit.textContent = data.strings.generate || 'Generate';
+            submit.textContent = isUploadedImageWorkflow(selectedTool()) ? (data.strings.uploadAndProcess || 'Upload and Process') : (data.strings.generate || 'Generate');
             submit.className = 'button button-primary';
             submit.type = 'submit';
             actionRow.appendChild(submit);
@@ -521,6 +559,31 @@
             (tool.input_schema || []).forEach(function (field) {
                 fieldsWrap.appendChild(renderField(field));
             });
+
+            if (isUploadedImageWorkflow(tool)) {
+                const uploadField = document.createElement('div');
+                uploadField.className = 'fat-field';
+
+                const uploadLabel = document.createElement('label');
+                uploadLabel.setAttribute('for', 'fat-uploaded-image');
+                uploadLabel.innerHTML = escapeHtml(data.strings.uploadImage || 'Upload Image') + ' <span class="fat-required">' + escapeHtml(data.strings.required || 'Required') + '</span>';
+                uploadField.appendChild(uploadLabel);
+
+                const uploadInput = document.createElement('input');
+                uploadInput.id = 'fat-uploaded-image';
+                uploadInput.name = 'uploaded_image';
+                uploadInput.type = 'file';
+                uploadInput.accept = 'image/png,image/jpeg,image/gif,image/webp';
+                uploadInput.required = true;
+                uploadField.appendChild(uploadInput);
+
+                const uploadHelp = document.createElement('p');
+                uploadHelp.className = 'description';
+                uploadHelp.textContent = data.strings.uploadImageHelp || 'Upload one image. The tool will create a 1200x675 WebP derivative.';
+                uploadField.appendChild(uploadHelp);
+
+                fieldsWrap.insertBefore(uploadField, fieldsWrap.firstChild);
+            }
 
             renderArticleSourceControls(tool);
             renderAttachmentSourceControls(tool);
@@ -867,6 +930,136 @@
             outputsWrap.appendChild(applyPanel);
         }
 
+        function renderUploadedImageOutput(meta) {
+            const imageMeta = (meta && meta.image) ? meta.image : {};
+            const processedAttachmentId = parseInt(imageMeta.attachment_id || 0, 10);
+
+            const card = document.createElement('div');
+            card.className = 'fat-output-card';
+
+            const header = document.createElement('h3');
+            header.textContent = data.strings.processedImageTitle || 'Processed Image';
+            card.appendChild(header);
+
+            if (imageMeta.processed_image_url) {
+                const preview = document.createElement('img');
+                preview.src = imageMeta.processed_image_url;
+                preview.alt = imageMeta.alt_text || '';
+                preview.className = 'fat-featured-image-preview';
+                card.appendChild(preview);
+            }
+
+            const info = document.createElement('p');
+            info.className = 'fat-muted';
+            info.textContent = (data.strings.uploadReference || 'Attachment ID') + ': ' + (imageMeta.attachment_id || '-') + ' | ' + (data.strings.uploadFormat || 'Format') + ': ' + (imageMeta.processed_format || 'webp') + ' | ' + (data.strings.uploadSize || 'Size') + ': ' + (imageMeta.processed_size || '1200x675');
+            card.appendChild(info);
+            outputsWrap.appendChild(card);
+
+            ['title', 'alt_text', 'description'].forEach(function (key) {
+                const fieldCard = document.createElement('div');
+                fieldCard.className = 'fat-output-card';
+                const label = document.createElement('h3');
+                label.textContent = key === 'alt_text' ? 'Generated Alt Text' : ('Generated ' + key.charAt(0).toUpperCase() + key.slice(1));
+                fieldCard.appendChild(label);
+                const textarea = document.createElement('textarea');
+                textarea.readOnly = true;
+                textarea.rows = key === 'description' ? 5 : 2;
+                textarea.value = imageMeta[key] || '';
+                fieldCard.appendChild(textarea);
+                outputsWrap.appendChild(fieldCard);
+            });
+
+            const applyPanel = document.createElement('div');
+            applyPanel.className = 'fat-output-card fat-apply-panel';
+
+            const applyTitle = document.createElement('h3');
+            applyTitle.textContent = data.strings.applyPanelTitle || 'Apply to WordPress';
+            applyPanel.appendChild(applyTitle);
+
+            const targetWrap = document.createElement('div');
+            targetWrap.className = 'fat-field';
+            const targetLabel = document.createElement('label');
+            targetLabel.textContent = data.strings.applyTarget || 'Target';
+            targetWrap.appendChild(targetLabel);
+
+            const targetSelect = document.createElement('select');
+            targetSelect.className = 'fat-content-post-select';
+            targetWrap.appendChild(targetSelect);
+            applyPanel.appendChild(targetWrap);
+
+            buildOptions(targetSelect, [], data.strings.choosePost || 'Choose a post', function (post) {
+                return post.title || ('#' + post.id);
+            });
+
+            Promise.all([loadPostsForStatus('draft'), loadPostsForStatus('publish')]).then(function (result) {
+                const posts = (result[0] || []).concat(result[1] || []);
+                const deduped = posts.filter(function (post, idx, all) {
+                    return all.findIndex(function (item) { return String(item.id) === String(post.id); }) === idx;
+                });
+                targetSelect.innerHTML = '';
+                buildOptions(targetSelect, deduped, data.strings.choosePost || 'Choose a post', function (post) {
+                    return post.title || ('#' + post.id);
+                });
+            });
+
+            const applyButton = document.createElement('button');
+            applyButton.type = 'button';
+            applyButton.className = 'button button-secondary fat-apply-button';
+            applyButton.textContent = data.strings.applyFeaturedImage || 'Apply as Featured Image';
+            applyButton.disabled = true;
+            applyPanel.appendChild(applyButton);
+
+            targetSelect.addEventListener('change', function () {
+                runState.targetId = targetSelect.value || '';
+                applyButton.disabled = !runState.targetId;
+                applyButton.dataset.allowEnabled = applyButton.disabled ? '0' : '1';
+            });
+
+            applyButton.addEventListener('click', async function () {
+                if (!runState.targetId) {
+                    setStatus(data.strings.applyTargetRequired || 'Please choose a target before applying.', 'error');
+                    return;
+                }
+
+                setRunnerBusy(true);
+                setStatus(data.strings.applyingFeaturedImage || 'Applying featured image…', 'loading');
+
+                try {
+                    const response = await fetch(data.applyUrl || '', {
+                        method: 'POST',
+                        credentials: 'same-origin',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-WP-Nonce': data.nonce
+                        },
+                        body: JSON.stringify({
+                            tool_id: selectedTool().id,
+                            target_type: 'post',
+                            target_id: parseInt(runState.targetId, 10),
+                            image_attachment_id: processedAttachmentId,
+                            outputs: {},
+                            apply_fields: ['featured_image']
+                        })
+                    });
+
+                    const payload = await response.json();
+                    if (!response.ok || !payload.success) {
+                        throw new Error((payload && payload.message) ? payload.message : (data.strings.applyError || 'Unable to apply selected outputs.'));
+                    }
+
+                    setStatus(data.strings.applyFeaturedSuccess || 'Featured image was applied successfully.', 'success');
+                } catch (error) {
+                    setStatus(error.message || data.strings.applyError || 'Unable to apply selected outputs.', 'error');
+                } finally {
+                    setRunnerBusy(false);
+                    applyButton.disabled = !runState.targetId;
+                    applyButton.dataset.allowEnabled = applyButton.disabled ? '0' : '1';
+                }
+            });
+
+            outputsWrap.appendChild(applyPanel);
+        }
+
         function renderOutputs(tool, outputs, meta) {
             outputsWrap.innerHTML = '';
 
@@ -877,6 +1070,10 @@
 
             if (meta && meta.workflow === 'featured_image_generator') {
                 renderFeaturedImageOutput(meta);
+                return;
+            }
+            if (meta && meta.workflow === 'uploaded_image_processor') {
+                renderUploadedImageOutput(meta);
                 return;
             }
 
@@ -933,6 +1130,7 @@
             const tool = selectedTool();
             const formData = new FormData(form);
             const inputs = {};
+            const isUploadedWorkflow = isUploadedImageWorkflow(tool);
 
             (tool.input_schema || []).forEach(function (field) {
                 inputs[field.key] = formData.get(field.key) || '';
@@ -940,6 +1138,10 @@
 
             if (isFeaturedImageWorkflow(tool) && !String(inputs.prompt || '').trim()) {
                 setStatus(data.strings.imagePromptRequired || 'Please enter an image prompt.', 'error');
+                return;
+            }
+            if (isUploadedWorkflow && !formData.get('uploaded_image')) {
+                setStatus(data.strings.uploadImageRequired || 'Please upload an image to process.', 'error');
                 return;
             }
 
@@ -961,28 +1163,49 @@
                 }
             }
 
-            const generateApplyButton = document.getElementById('fat-runner-generate-apply');
-            submit.disabled = true;
-            if (generateApplyButton) {
-                generateApplyButton.disabled = true;
-            }
-            setStatus(data.strings.running || 'Running…', 'loading');
+            setRunnerBusy(true);
+            const stopStageStatus = isUploadedWorkflow ? createStagedStatusUpdater([
+                { delay: 0, message: data.strings.uploadingImage || 'Uploading image…' },
+                { delay: 800, message: data.strings.processingImage || 'Processing image…' },
+                { delay: 1800, message: data.strings.generatingMetadata || 'Generating metadata…' }
+            ]) : createStagedStatusUpdater([
+                { delay: 0, message: data.strings.running || 'Running…' }
+            ]);
             outputsWrap.innerHTML = '';
             resetRunState();
 
             try {
-                const response = await fetch(data.restUrl, {
-                    method: 'POST',
-                    credentials: 'same-origin',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'X-WP-Nonce': data.nonce
-                    },
-                    body: JSON.stringify({
-                        tool_id: tool.id,
-                        inputs: inputs
-                    })
-                });
+                let response;
+                if (isUploadedWorkflow) {
+                    const uploadBody = new FormData();
+                    uploadBody.append('tool_id', String(tool.id));
+                    Object.keys(inputs).forEach(function (key) {
+                        uploadBody.append('inputs[' + key + ']', inputs[key]);
+                    });
+                    uploadBody.append('uploaded_image', formData.get('uploaded_image'));
+
+                    response = await fetch(data.restUrl, {
+                        method: 'POST',
+                        credentials: 'same-origin',
+                        headers: {
+                            'X-WP-Nonce': data.nonce
+                        },
+                        body: uploadBody
+                    });
+                } else {
+                    response = await fetch(data.restUrl, {
+                        method: 'POST',
+                        credentials: 'same-origin',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-WP-Nonce': data.nonce
+                        },
+                        body: JSON.stringify({
+                            tool_id: tool.id,
+                            inputs: inputs
+                        })
+                    });
+                }
 
                 const payload = await response.json();
                 if (!response.ok || !payload.success) {
@@ -1008,10 +1231,8 @@
             } catch (error) {
                 setStatus(error.message || data.strings.runError || 'The tool could not be run.', 'error');
             } finally {
-                submit.disabled = false;
-                if (generateApplyButton) {
-                    generateApplyButton.disabled = false;
-                }
+                stopStageStatus();
+                setRunnerBusy(false);
             }
         }
 
