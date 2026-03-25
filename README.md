@@ -2,6 +2,10 @@
 
 **Fabled AI Tools** is a WordPress-admin plugin for creating and running structured AI workflows with server-side OpenAI calls.
 
+**Owner / Developer:** Fabled Sky Research  
+**Project website:** https://fabledsky.com/community-projects/  
+**Project year:** 2026
+
 It supports two usage styles:
 
 1. **Configurable text tools** (e.g., SEO excerpt generation).
@@ -300,4 +304,3 @@ Design principles:
   3. metadata
   4. derivative
   5. explicit apply
-
