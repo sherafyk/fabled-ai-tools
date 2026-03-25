@@ -111,6 +111,8 @@ class FAT_Tool_Runner {
             return $resolved_inputs;
         }
 
+        $resolved_inputs = (array) apply_filters( 'fat_pre_run_inputs', $resolved_inputs, $tool, $user, $raw_inputs );
+
         $can_run = $this->usage_limiter->assert_can_run( $tool, $user->ID );
         if ( is_wp_error( $can_run ) ) {
             $can_run->add_data( array( 'status' => 429 ) );
@@ -211,6 +213,7 @@ class FAT_Tool_Runner {
 
         $outputs = $validated_outputs['outputs'];
         $outputs['__fat_openai_request_id'] = (string) FAT_Helpers::array_get( $response, 'request_id', '' );
+        $outputs = (array) apply_filters( 'fat_post_run_outputs', $outputs, $tool, $user, $resolved_inputs, $response );
 
         $this->log_run(
             $tool,
@@ -288,6 +291,10 @@ class FAT_Tool_Runner {
                     'action'        => 'apply_featured_image',
                 )
             );
+
+            if ( ! is_wp_error( $apply_result ) ) {
+                do_action( 'fat_apply_completed', $tool, $user, 'post', $target_id, $apply_result, array( 'featured_image' ) );
+            }
 
             return $apply_result;
         }
@@ -396,6 +403,8 @@ class FAT_Tool_Runner {
         );
 
         $this->log_apply_action( $tool, $user, $target_type, $target_id, array_keys( $selected_mappings ), $outputs, $result, array( 'action' => 'apply_outputs' ) );
+
+        do_action( 'fat_apply_completed', $tool, $user, $target_type, $target_id, $result, array_keys( $selected_mappings ) );
 
         return $result;
     }

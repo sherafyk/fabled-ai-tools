@@ -57,7 +57,7 @@ class FAT_Prompt_Engine {
         $source         = (array) FAT_Helpers::array_get( $wp_integration, 'source', array() );
         $apply          = (array) FAT_Helpers::array_get( $wp_integration, 'apply', array() );
 
-        return array(
+        $definition = array(
             'id'              => (int) FAT_Helpers::array_get( $tool, 'id', 0 ),
             'name'            => (string) FAT_Helpers::array_get( $tool, 'name', '' ),
             'slug'            => (string) FAT_Helpers::array_get( $tool, 'slug', '' ),
@@ -81,6 +81,8 @@ class FAT_Prompt_Engine {
                 ),
             ),
         );
+
+        return (array) apply_filters( 'fat_public_tool_definition', $definition, $tool );
     }
 
     public function sanitize_runtime_inputs( $tool, $inputs ) {

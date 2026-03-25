@@ -29,6 +29,7 @@ require_once FAT_PLUGIN_DIR . 'includes/class-fat-tool-validator.php';
 require_once FAT_PLUGIN_DIR . 'includes/class-fat-prompt-engine.php';
 require_once FAT_PLUGIN_DIR . 'includes/class-fat-openai-client.php';
 require_once FAT_PLUGIN_DIR . 'includes/class-fat-entity-query-service.php';
+require_once FAT_PLUGIN_DIR . 'includes/class-fat-builtin-tools.php';
 require_once FAT_PLUGIN_DIR . 'includes/class-fat-featured-image-generator.php';
 require_once FAT_PLUGIN_DIR . 'includes/class-fat-uploaded-image-processor.php';
 require_once FAT_PLUGIN_DIR . 'includes/class-fat-usage-limiter.php';
@@ -43,5 +44,12 @@ register_deactivation_hook( __FILE__, array( 'FAT_Activator', 'deactivate' ) );
 function fat_plugin() {
     return FAT_Plugin::instance();
 }
+
+
+function fat_load_textdomain() {
+    load_plugin_textdomain( 'fabled-ai-tools', false, dirname( plugin_basename( FAT_PLUGIN_FILE ) ) . '/languages' );
+}
+
+add_action( 'plugins_loaded', 'fat_load_textdomain', 5 );
 
 add_action( 'plugins_loaded', 'fat_plugin' );

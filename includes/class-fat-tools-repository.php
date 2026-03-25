@@ -30,7 +30,9 @@ class FAT_Tools_Repository {
             $where .= ' AND is_active = 1';
         }
 
-        $sql  = "SELECT * FROM {$this->table} WHERE {$where} ORDER BY {$args['orderby']}";
+        $orderby = $this->sanitize_orderby_clause( FAT_Helpers::array_get( $args, 'orderby', '' ) );
+
+        $sql  = "SELECT * FROM {$this->table} WHERE {$where} ORDER BY {$orderby}";
         $rows = $wpdb->get_results( $sql, ARRAY_A );
 
         return array_map( array( $this, 'map_row' ), (array) $rows );
@@ -213,6 +215,46 @@ class FAT_Tools_Repository {
         }
 
         return $formats;
+    }
+
+
+    protected function sanitize_orderby_clause( $orderby ) {
+        $orderby = is_string( $orderby ) ? trim( $orderby ) : '';
+        if ( '' === $orderby ) {
+            return 'sort_order ASC, name ASC';
+        }
+
+        $allowed_columns = array( 'id', 'name', 'slug', 'is_active', 'sort_order', 'created_at', 'updated_at' );
+        $clauses         = array();
+
+        foreach ( explode( ',', $orderby ) as $part ) {
+            $part = trim( $part );
+            if ( '' === $part ) {
+                continue;
+            }
+
+            if ( ! preg_match( '/^([a-z_]+)(?:\s+(ASC|DESC))?$/i', $part, $matches ) ) {
+                continue;
+            }
+
+            $column = strtolower( $matches[1] );
+            if ( ! in_array( $column, $allowed_columns, true ) ) {
+                continue;
+            }
+
+            $direction = isset( $matches[2] ) ? strtoupper( $matches[2] ) : 'ASC';
+            if ( ! in_array( $direction, array( 'ASC', 'DESC' ), true ) ) {
+                $direction = 'ASC';
+            }
+
+            $clauses[] = $column . ' ' . $direction;
+        }
+
+        if ( empty( $clauses ) ) {
+            return 'sort_order ASC, name ASC';
+        }
+
+        return implode( ', ', $clauses );
     }
 
     protected function map_row( $row ) {

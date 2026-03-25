@@ -460,7 +460,7 @@ class FAT_Activator {
         }
     }
 
-    protected static function seeded_tool_blueprints() {
+    public static function seeded_tool_blueprints() {
         return array(
             'featured-image-generator' => self::featured_image_generator_blueprint( array( 'administrator', 'editor', 'author' ) ),
             'uploaded-image-processor' => self::uploaded_image_processor_blueprint( array( 'administrator', 'editor', 'author' ) ),
