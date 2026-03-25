@@ -18,6 +18,14 @@
             .replace(/'/g, '&#039;');
     }
 
+    function cssEscape(value) {
+        if (window.CSS && typeof window.CSS.escape === 'function') {
+            return window.CSS.escape(String(value || ''));
+        }
+
+        return String(value || '').replace(/["\\]/g, '\\$&');
+    }
+
     function nextIndex(tbody) {
         const current = parseInt(tbody.dataset.nextIndex || '0', 10);
         tbody.dataset.nextIndex = String(current + 1);
@@ -104,6 +112,7 @@
         const tools = Array.isArray(data.tools) ? data.tools : [];
         const byId = {};
         const entityCache = {};
+        const launchContext = data.launchContext || {};
         const contentSourceState = {
             source: 'paste',
             selectedPostId: '',
@@ -122,6 +131,18 @@
         tools.forEach(function (tool) {
             byId[String(tool.id)] = tool;
         });
+
+        function toolFromLaunchContext() {
+            if (launchContext && launchContext.toolId && byId[String(launchContext.toolId)]) {
+                return byId[String(launchContext.toolId)];
+            }
+            if (launchContext && launchContext.toolSlug) {
+                return tools.find(function (tool) {
+                    return tool && tool.slug === launchContext.toolSlug;
+                }) || null;
+            }
+            return null;
+        }
 
         if (!tools.length) {
             return;
@@ -440,9 +461,17 @@
                 select: selectEl,
                 status: statusEl,
                 setValue: function (value) {
-                    if (value) {
-                        selectEl.value = String(value);
+                    if (!value) {
+                        return;
                     }
+                    const normalized = String(value);
+                    if (!selectEl.querySelector('option[value="' + cssEscape(normalized) + '"]')) {
+                        const injected = document.createElement('option');
+                        injected.value = normalized;
+                        injected.textContent = '#' + normalized;
+                        selectEl.appendChild(injected);
+                    }
+                    selectEl.value = normalized;
                 },
                 getValue: function () {
                     return selectEl.value || '';
@@ -450,7 +479,7 @@
                 reload: function () {
                     searchInput.value = '';
                     state.query = '';
-                    hydrate(1, false);
+                    return hydrate(1, false);
                 }
             };
         }
@@ -549,13 +578,13 @@
                     postSelectWrap.hidden = true;
                     setArticleInputState(false);
                     bodyStatus.textContent = '';
-                    return;
+                    return Promise.resolve();
                 }
 
                 postSelectWrap.hidden = false;
                 setArticleInputState(true);
                 bodyStatus.textContent = data.strings.bodyFilledFromPost || 'Article body will be pulled from the selected post.';
-                postSelector.reload();
+                return postSelector.reload();
             }
 
             sourceSelect.addEventListener('change', function () {
@@ -567,8 +596,19 @@
 
             contentSourceState.controls = controlsWrap;
             const defaultSource = sourceOptions.length ? sourceOptions[0].value : 'paste';
-            sourceSelect.value = defaultSource;
-            updateSourceUi(defaultSource);
+            const launchSourceStatus = (launchContext.sourceStatus === 'draft' || launchContext.sourceStatus === 'publish')
+                ? launchContext.sourceStatus
+                : '';
+            const initialSource = launchSourceStatus && sourceOptions.some(function (option) { return option.value === launchSourceStatus; })
+                ? launchSourceStatus
+                : defaultSource;
+            sourceSelect.value = initialSource;
+            updateSourceUi(initialSource).then(function () {
+                if ((initialSource === 'draft' || initialSource === 'publish') && launchContext.sourcePostId) {
+                    postSelector.setValue(String(launchContext.sourcePostId));
+                    contentSourceState.selectedPostId = String(launchContext.sourcePostId);
+                }
+            });
         }
 
         function renderAttachmentSourceControls(tool) {
@@ -619,7 +659,12 @@
             });
 
             contentSourceState.attachmentControls = controlsWrap;
-            attachmentSelector.reload();
+            attachmentSelector.reload().then(function () {
+                if (launchContext.attachmentId) {
+                    attachmentSelector.setValue(String(launchContext.attachmentId));
+                    contentSourceState.selectedAttachmentId = String(launchContext.attachmentId);
+                }
+            });
         }
 
         function renderRunnerActions() {
@@ -821,7 +866,7 @@
             help.textContent = data.strings.applyFields || 'Fields to apply';
             panel.appendChild(help);
 
-            let selectedTargetId = String(applyMeta.target_id || '');
+            let selectedTargetId = String(runState.targetId || applyMeta.target_id || launchContext.targetPostId || '');
             let onTargetChanged = function () {};
             if (applyMeta.target_type === 'post') {
                 const targetWrap = document.createElement('div');
@@ -1011,6 +1056,12 @@
             applyButton.disabled = true;
             applyPanel.appendChild(applyButton);
 
+            if (launchContext.targetPostId) {
+                targetSelector.setValue(String(launchContext.targetPostId));
+                runState.targetId = String(launchContext.targetPostId);
+                applyButton.disabled = false;
+            }
+
             targetSelector.select.addEventListener('change', function () {
                 runState.targetId = targetSelector.getValue();
                 applyButton.disabled = !runState.targetId;
@@ -1145,6 +1196,13 @@
             applyButton.textContent = data.strings.applyFeaturedImage || 'Apply as Featured Image';
             applyButton.disabled = true;
             applyPanel.appendChild(applyButton);
+
+            if (launchContext.targetPostId) {
+                targetSelector.setValue(String(launchContext.targetPostId));
+                runState.targetId = String(launchContext.targetPostId);
+                applyButton.disabled = false;
+                applyButton.dataset.allowEnabled = '1';
+            }
 
             targetSelector.select.addEventListener('change', function () {
                 runState.targetId = targetSelector.getValue();
@@ -1378,6 +1436,10 @@
         });
         form.addEventListener('submit', runTool);
 
+        const launchTool = toolFromLaunchContext();
+        if (launchTool) {
+            select.value = String(launchTool.id);
+        }
         renderInputs(selectedTool());
     }
 
