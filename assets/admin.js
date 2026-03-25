@@ -206,9 +206,18 @@
             const config = tool && tool.wp_integration ? tool.wp_integration : {};
             const source = config.source || {};
             const apply = config.apply || {};
+            let workflow = config.workflow || '';
+
+            if (!workflow) {
+                if (tool && tool.slug === 'featured-image-generator') {
+                    workflow = 'featured_image_generator';
+                } else if (tool && tool.slug === 'uploaded-image-processor') {
+                    workflow = 'uploaded_image_processor';
+                }
+            }
 
             return {
-                workflow: config.workflow || '',
+                workflow: workflow,
                 workflow_config: config.workflow_config || {},
                 source: {
                     type: source.type || '',

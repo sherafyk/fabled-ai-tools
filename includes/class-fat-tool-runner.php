@@ -846,6 +846,19 @@ class FAT_Tool_Runner {
     }
 
     protected function tool_workflow_type( $tool ) {
-        return sanitize_key( FAT_Helpers::array_get( FAT_Helpers::array_get( $tool, 'wp_integration', array() ), 'workflow', '' ) );
+        $workflow = sanitize_key( FAT_Helpers::array_get( FAT_Helpers::array_get( $tool, 'wp_integration', array() ), 'workflow', '' ) );
+        if ( '' !== $workflow ) {
+            return $workflow;
+        }
+
+        $slug = sanitize_title( FAT_Helpers::array_get( $tool, 'slug', '' ) );
+        if ( 'featured-image-generator' === $slug ) {
+            return 'featured_image_generator';
+        }
+        if ( 'uploaded-image-processor' === $slug ) {
+            return 'uploaded_image_processor';
+        }
+
+        return '';
     }
 }
