@@ -110,9 +110,10 @@ class FAT_Featured_Image_Generator {
         );
     }
 
-    public function apply_featured_image( $post_id, $attachment_id ) {
+    public function apply_featured_image( $post_id, $attachment_id, $user = null ) {
         $post_id       = absint( $post_id );
         $attachment_id = absint( $attachment_id );
+        $user          = $this->normalize_user( $user );
 
         if ( $post_id <= 0 || $attachment_id <= 0 ) {
             return new WP_Error( 'fat_invalid_featured_apply', __( 'A valid post and generated image are required.', 'fabled-ai-tools' ), array( 'status' => 400 ) );
@@ -128,11 +129,11 @@ class FAT_Featured_Image_Generator {
             return new WP_Error( 'fat_invalid_attachment', __( 'Generated image attachment could not be found.', 'fabled-ai-tools' ), array( 'status' => 404 ) );
         }
 
-        if ( ! current_user_can( 'edit_post', $post_id ) ) {
+        if ( ! $user || ! $user->exists() || ! user_can( $user, 'edit_post', $post_id ) ) {
             return new WP_Error( 'fat_target_forbidden', __( 'You are not allowed to edit this post.', 'fabled-ai-tools' ), array( 'status' => 403 ) );
         }
 
-        if ( ! current_user_can( 'edit_post', $attachment_id ) ) {
+        if ( ! user_can( $user, 'edit_post', $attachment_id ) ) {
             return new WP_Error( 'fat_media_forbidden', __( 'You are not allowed to use this image.', 'fabled-ai-tools' ), array( 'status' => 403 ) );
         }
 
@@ -274,5 +275,17 @@ class FAT_Featured_Image_Generator {
         update_post_meta( $target_attachment_id, '_wp_attachment_image_alt', $source_alt );
 
         return true;
+    }
+
+    protected function normalize_user( $user ) {
+        if ( $user instanceof WP_User ) {
+            return $user;
+        }
+
+        if ( is_numeric( $user ) && $user > 0 ) {
+            return get_userdata( absint( $user ) );
+        }
+
+        return wp_get_current_user();
     }
 }
