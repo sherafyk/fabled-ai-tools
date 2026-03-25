@@ -84,6 +84,11 @@ class FAT_Featured_Image_Generator {
             return $featured_attachment_id;
         }
 
+        $copied_metadata = $this->copy_attachment_metadata( $original_attachment_id, $featured_attachment_id, true );
+        if ( is_wp_error( $copied_metadata ) ) {
+            return $copied_metadata;
+        }
+
         return array(
             'workflow'              => 'featured_image_generator',
             'prompt'                => $prompt,
@@ -234,5 +239,40 @@ class FAT_Featured_Image_Generator {
         }
 
         return $trimmed;
+    }
+
+    protected function copy_attachment_metadata( $source_attachment_id, $target_attachment_id, $preserve_target_title = false ) {
+        $source_attachment_id = absint( $source_attachment_id );
+        $target_attachment_id = absint( $target_attachment_id );
+
+        if ( $source_attachment_id <= 0 || $target_attachment_id <= 0 ) {
+            return new WP_Error( 'fat_copy_metadata_invalid', __( 'Invalid attachments provided for metadata copy.', 'fabled-ai-tools' ), array( 'status' => 400 ) );
+        }
+
+        $source = get_post( $source_attachment_id );
+        $target = get_post( $target_attachment_id );
+        if ( ! $source || ! $target || 'attachment' !== $source->post_type || 'attachment' !== $target->post_type ) {
+            return new WP_Error( 'fat_copy_metadata_missing', __( 'Attachment metadata source or target is missing.', 'fabled-ai-tools' ), array( 'status' => 404 ) );
+        }
+
+        $update = array(
+            'ID'           => $target_attachment_id,
+            'post_content' => (string) $source->post_content,
+            'post_excerpt' => (string) $source->post_excerpt,
+        );
+
+        if ( ! $preserve_target_title ) {
+            $update['post_title'] = (string) $source->post_title;
+        }
+
+        $updated = wp_update_post( wp_slash( $update ), true );
+        if ( is_wp_error( $updated ) ) {
+            return new WP_Error( 'fat_copy_metadata_failed', $updated->get_error_message(), array( 'status' => 500 ) );
+        }
+
+        $source_alt = (string) get_post_meta( $source_attachment_id, '_wp_attachment_image_alt', true );
+        update_post_meta( $target_attachment_id, '_wp_attachment_image_alt', $source_alt );
+
+        return true;
     }
 }
