@@ -68,7 +68,8 @@ Fabled AI Tools lets admins define tool schemas and prompts, then lets authorize
    - `wp-content/plugins/fabled-ai-tools`
 2. In WordPress admin, activate **Fabled AI Tools**.
 3. Open **Fabled AI Tools → Settings** and save your OpenAI API key.
-4. Verify capabilities for intended users (administrator/editor/author by default for run access).
+4. (Optional) Run **Test OpenAI Connection** to confirm credentials and timeout.
+5. Verify capabilities for intended users (administrator/editor/author by default for run access).
 
 ---
 
@@ -233,6 +234,12 @@ Validation rules enforce:
 ## Logging and observability
 
 Run logs are available in **Fabled AI Tools → Logs**.
+
+Settings now include operational controls for:
+- pausing all run/apply execution globally
+- log retention days (automatic daily cleanup)
+- manual log purge
+- OpenAI connection test with request ID diagnostics
 
 Typical run data includes:
 - status

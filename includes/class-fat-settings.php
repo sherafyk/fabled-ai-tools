@@ -12,10 +12,13 @@ class FAT_Settings {
         'default_model'       => 'gpt-5.4-mini',
         'default_daily_limit' => 20,
         'default_timeout'     => 45,
+        'execution_enabled'   => 1,
+        'log_retention_days'  => 30,
     );
 
     public function hooks() {
         add_action( 'admin_init', array( $this, 'register_settings' ) );
+        add_action( 'fat_daily_log_cleanup', array( $this, 'handle_daily_log_cleanup' ) );
     }
 
     public function register_settings() {
@@ -63,22 +66,61 @@ class FAT_Settings {
             'fat-settings',
             'fat_main_section'
         );
+
+        add_settings_section(
+            'fat_operations_section',
+            __( 'Operational Controls', 'fabled-ai-tools' ),
+            array( $this, 'render_operations_section' ),
+            'fat-settings'
+        );
+
+        add_settings_field(
+            'execution_enabled',
+            __( 'Runner availability', 'fabled-ai-tools' ),
+            array( $this, 'render_execution_enabled_field' ),
+            'fat-settings',
+            'fat_operations_section'
+        );
+
+        add_settings_field(
+            'log_retention_days',
+            __( 'Log retention (days)', 'fabled-ai-tools' ),
+            array( $this, 'render_log_retention_days_field' ),
+            'fat-settings',
+            'fat_operations_section'
+        );
     }
 
     public function sanitize_settings( $input ) {
         $stored = $this->get_all();
         $input  = is_array( $input ) ? $input : array();
 
+        $api_key_input = sanitize_text_field( FAT_Helpers::array_get( $input, 'api_key', '' ) );
+        $clear_api_key = ! empty( FAT_Helpers::array_get( $input, 'clear_api_key', 0 ) );
+        $clean_api_key = (string) FAT_Helpers::array_get( $stored, 'api_key', '' );
+
+        if ( ! $this->has_constant_api_key() ) {
+            if ( $clear_api_key ) {
+                $clean_api_key = '';
+            } elseif ( '' !== trim( $api_key_input ) ) {
+                $clean_api_key = trim( $api_key_input );
+            }
+        }
+
         $clean = array(
-            'api_key'             => $this->has_constant_api_key() ? $stored['api_key'] : sanitize_text_field( FAT_Helpers::array_get( $input, 'api_key', '' ) ),
+            'api_key'             => $clean_api_key,
             'default_model'       => sanitize_text_field( FAT_Helpers::array_get( $input, 'default_model', $this->defaults['default_model'] ) ),
             'default_daily_limit' => max( 0, absint( FAT_Helpers::array_get( $input, 'default_daily_limit', $this->defaults['default_daily_limit'] ) ) ),
             'default_timeout'     => max( 5, absint( FAT_Helpers::array_get( $input, 'default_timeout', $this->defaults['default_timeout'] ) ) ),
+            'execution_enabled'   => ! empty( FAT_Helpers::array_get( $input, 'execution_enabled', 0 ) ) ? 1 : 0,
+            'log_retention_days'  => max( 0, absint( FAT_Helpers::array_get( $input, 'log_retention_days', $this->defaults['log_retention_days'] ) ) ),
         );
 
         if ( '' === $clean['default_model'] ) {
             $clean['default_model'] = $this->defaults['default_model'];
         }
+
+        $this->ensure_log_cleanup_schedule();
 
         return $clean;
     }
@@ -113,6 +155,14 @@ class FAT_Settings {
         return defined( 'FAT_OPENAI_API_KEY' ) && FAT_OPENAI_API_KEY;
     }
 
+    public function is_execution_enabled() {
+        return ! empty( $this->get( 'execution_enabled', 1 ) );
+    }
+
+    public function log_retention_days() {
+        return max( 0, absint( $this->get( 'log_retention_days', $this->defaults['log_retention_days'] ) ) );
+    }
+
     public function mask_api_key() {
         $key = $this->get_api_key();
         if ( '' === $key ) {
@@ -131,20 +181,30 @@ class FAT_Settings {
         echo '<p>' . esc_html__( 'Configure the server-side OpenAI connection and basic execution defaults.', 'fabled-ai-tools' ) . '</p>';
     }
 
+    public function render_operations_section() {
+        echo '<p>' . esc_html__( 'Control runner availability and log retention for operations.', 'fabled-ai-tools' ) . '</p>';
+    }
+
     public function render_api_key_field() {
-        $settings = $this->get_all();
-        $value    = isset( $settings['api_key'] ) ? (string) $settings['api_key'] : '';
+        $masked = $this->mask_api_key();
 
         if ( $this->has_constant_api_key() ) {
             echo '<p><strong>' . esc_html__( 'API key is being loaded from the FAT_OPENAI_API_KEY constant in wp-config.php.', 'fabled-ai-tools' ) . '</strong></p>';
-            echo '<p>' . esc_html( $this->mask_api_key() ) . '</p>';
-            echo '<input type="password" class="regular-text" disabled value="' . esc_attr( $this->mask_api_key() ) . '" />';
+            echo '<p>' . esc_html( $masked ) . '</p>';
+            echo '<input type="password" class="regular-text" disabled value="' . esc_attr( $masked ) . '" />';
             echo '<p class="description">' . esc_html__( 'The saved option will be ignored while the constant is defined.', 'fabled-ai-tools' ) . '</p>';
             return;
         }
 
-        echo '<input type="password" class="regular-text" name="' . esc_attr( self::OPTION_KEY ) . '[api_key]" value="' . esc_attr( $value ) . '" autocomplete="new-password" />';
-        echo '<p class="description">' . esc_html__( 'Stored in WordPress options unless FAT_OPENAI_API_KEY is defined in wp-config.php.', 'fabled-ai-tools' ) . '</p>';
+        if ( '' !== $masked ) {
+            echo '<p><strong>' . esc_html__( 'Current saved key:', 'fabled-ai-tools' ) . '</strong> ' . esc_html( $masked ) . '</p>';
+        } else {
+            echo '<p>' . esc_html__( 'No API key is currently stored in plugin settings.', 'fabled-ai-tools' ) . '</p>';
+        }
+
+        echo '<input type="password" class="regular-text" name="' . esc_attr( self::OPTION_KEY ) . '[api_key]" value="" autocomplete="new-password" />';
+        echo '<p class="description">' . esc_html__( 'Leave blank to keep the existing key. Enter a value to replace it.', 'fabled-ai-tools' ) . '</p>';
+        echo '<label><input type="checkbox" name="' . esc_attr( self::OPTION_KEY ) . '[clear_api_key]" value="1" /> ' . esc_html__( 'Clear stored API key', 'fabled-ai-tools' ) . '</label>';
     }
 
     public function render_default_model_field() {
@@ -163,5 +223,33 @@ class FAT_Settings {
         $value = (int) $this->get( 'default_timeout', $this->defaults['default_timeout'] );
         echo '<input type="number" min="5" step="1" name="' . esc_attr( self::OPTION_KEY ) . '[default_timeout]" value="' . esc_attr( $value ) . '" />';
         echo '<p class="description">' . esc_html__( 'Timeout used for OpenAI requests when no other value is specified.', 'fabled-ai-tools' ) . '</p>';
+    }
+
+    public function render_execution_enabled_field() {
+        $enabled = ! empty( $this->get( 'execution_enabled', 1 ) );
+        echo '<label><input type="checkbox" name="' . esc_attr( self::OPTION_KEY ) . '[execution_enabled]" value="1" ' . checked( true, $enabled, false ) . ' /> ' . esc_html__( 'Enable tool runs and apply actions', 'fabled-ai-tools' ) . '</label>';
+        echo '<p class="description">' . esc_html__( 'Disable this during incidents or budget freezes. Runner and apply requests will be blocked while disabled.', 'fabled-ai-tools' ) . '</p>';
+    }
+
+    public function render_log_retention_days_field() {
+        $days = $this->log_retention_days();
+        echo '<input type="number" min="0" step="1" name="' . esc_attr( self::OPTION_KEY ) . '[log_retention_days]" value="' . esc_attr( $days ) . '" />';
+        echo '<p class="description">' . esc_html__( 'Logs older than this many days are removed during daily cleanup. Set 0 to disable automatic cleanup.', 'fabled-ai-tools' ) . '</p>';
+    }
+
+    public function ensure_log_cleanup_schedule() {
+        if ( ! wp_next_scheduled( 'fat_daily_log_cleanup' ) ) {
+            wp_schedule_event( time() + HOUR_IN_SECONDS, 'daily', 'fat_daily_log_cleanup' );
+        }
+    }
+
+    public function handle_daily_log_cleanup() {
+        $days = $this->log_retention_days();
+        if ( $days <= 0 ) {
+            return;
+        }
+
+        $runs_repo = new FAT_Runs_Repository();
+        $runs_repo->delete_older_than_days( $days );
     }
 }

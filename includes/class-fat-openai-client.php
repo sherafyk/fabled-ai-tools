@@ -109,6 +109,44 @@ class FAT_OpenAI_Client {
         );
     }
 
+
+    public function test_connection( $args = array() ) {
+        $model   = sanitize_text_field( FAT_Helpers::array_get( $args, 'model', $this->settings->get( 'default_model', 'gpt-5.4-mini' ) ) );
+        $timeout = max( 5, absint( FAT_Helpers::array_get( $args, 'timeout', $this->settings->get( 'default_timeout', 45 ) ) ) );
+
+        $start    = microtime( true );
+        $response = $this->request_structured_response(
+            array(
+                'model'             => $model,
+                'system_prompt'     => 'Return a minimal JSON object for a connectivity check.',
+                'user_prompt'       => 'Respond with {"status":"ok"}.',
+                'json_schema'       => array(
+                    'type'                 => 'object',
+                    'properties'           => array(
+                        'status' => array( 'type' => 'string' ),
+                    ),
+                    'required'             => array( 'status' ),
+                    'additionalProperties' => false,
+                ),
+                'max_output_tokens' => 20,
+                'timeout'           => $timeout,
+                'format_name'       => 'fat_connection_test',
+            )
+        );
+
+        if ( is_wp_error( $response ) ) {
+            return $response;
+        }
+
+        return array(
+            'ok'         => true,
+            'model'      => (string) FAT_Helpers::array_get( $response, 'model', $model ),
+            'request_id' => (string) FAT_Helpers::array_get( $response, 'request_id', '' ),
+            'latency_ms' => (int) round( ( microtime( true ) - $start ) * 1000 ),
+            'usage'      => (array) FAT_Helpers::array_get( $response, 'usage', array() ),
+            'status'     => (string) FAT_Helpers::array_get( FAT_Helpers::array_get( $response, 'parsed', array() ), 'status', '' ),
+        );
+    }
     protected function request_structured_response( $args ) {
         $api_key = $this->settings->get_api_key();
         if ( '' === $api_key ) {

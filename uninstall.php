@@ -15,3 +15,8 @@ $wpdb->query( "DROP TABLE IF EXISTS {$wpdb->prefix}fat_runs" );
 
 delete_option( 'fat_settings' );
 delete_option( 'fat_db_version' );
+
+$timestamp = wp_next_scheduled( 'fat_daily_log_cleanup' );
+if ( $timestamp ) {
+    wp_unschedule_event( $timestamp, 'fat_daily_log_cleanup' );
+}

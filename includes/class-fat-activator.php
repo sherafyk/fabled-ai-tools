@@ -13,17 +13,22 @@ class FAT_Activator {
         self::maybe_seed_missing_featured_image_generator();
         self::maybe_seed_missing_uploaded_image_processor();
         self::maybe_repair_corrupted_seeded_tools();
+        self::ensure_scheduled_events();
         update_option( 'fat_db_version', FAT_DB_VERSION );
     }
 
     public static function deactivate() {
-        // Intentionally left blank.
+        $timestamp = wp_next_scheduled( 'fat_daily_log_cleanup' );
+        if ( $timestamp ) {
+            wp_unschedule_event( $timestamp, 'fat_daily_log_cleanup' );
+        }
     }
 
     public static function maybe_upgrade() {
         // Keep missing built-ins backfilled even when schema version is unchanged.
         self::maybe_seed_missing_featured_image_generator();
         self::maybe_seed_missing_uploaded_image_processor();
+        self::ensure_scheduled_events();
 
         $installed = get_option( 'fat_db_version', '' );
         if ( FAT_DB_VERSION !== $installed ) {
@@ -33,10 +38,17 @@ class FAT_Activator {
             self::maybe_seed_missing_featured_image_generator();
             self::maybe_seed_missing_uploaded_image_processor();
             self::maybe_repair_corrupted_seeded_tools();
+            self::ensure_scheduled_events();
             update_option( 'fat_db_version', FAT_DB_VERSION );
         }
     }
 
+
+    protected static function ensure_scheduled_events() {
+        if ( ! wp_next_scheduled( 'fat_daily_log_cleanup' ) ) {
+            wp_schedule_event( time() + HOUR_IN_SECONDS, 'daily', 'fat_daily_log_cleanup' );
+        }
+    }
     public static function add_capabilities() {
         $cap_map = array(
             'administrator' => array(
