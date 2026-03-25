@@ -180,6 +180,15 @@
     margin-top: 0;
 }
 
+.fat-featured-image-preview {
+    display: block;
+    max-width: 100%;
+    height: auto;
+    border: 1px solid #dcdcde;
+    border-radius: 4px;
+    margin: 8px 0 10px;
+}
+
 .fat-log-detail pre,
 .fat-log-preview,
 .fat-card pre {

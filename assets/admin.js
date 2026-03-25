@@ -208,6 +208,8 @@
             const apply = config.apply || {};
 
             return {
+                workflow: config.workflow || '',
+                workflow_config: config.workflow_config || {},
                 source: {
                     type: source.type || '',
                     allow_manual: !!source.allow_manual,
@@ -220,6 +222,11 @@
                     mappings: Array.isArray(apply.mappings) ? apply.mappings : []
                 }
             };
+        }
+
+        function isFeaturedImageWorkflow(tool) {
+            const wpConfig = getToolWpConfig(tool);
+            return wpConfig.workflow === 'featured_image_generator';
         }
 
         async function loadPostsForStatus(status) {
@@ -498,6 +505,10 @@
                 runTool({ preventDefault: function () {} }, { applyAfterGenerate: true });
             });
             actionRow.appendChild(generateApplyButton);
+
+            if (isFeaturedImageWorkflow(selectedTool())) {
+                generateApplyButton.hidden = true;
+            }
         }
 
         function renderInputs(tool) {
@@ -726,6 +737,136 @@
             return panel;
         }
 
+        function renderFeaturedImageOutput(meta) {
+            const imageMeta = (meta && meta.image) ? meta.image : {};
+            const featuredAttachmentId = parseInt(imageMeta.featured_attachment_id || 0, 10);
+
+            const card = document.createElement('div');
+            card.className = 'fat-output-card';
+
+            const header = document.createElement('h3');
+            header.textContent = 'Generated Featured Image';
+            card.appendChild(header);
+
+            if (imageMeta.featured_image_url) {
+                const preview = document.createElement('img');
+                preview.src = imageMeta.featured_image_url;
+                preview.alt = imageMeta.alt_text || '';
+                preview.className = 'fat-featured-image-preview';
+                card.appendChild(preview);
+            }
+
+            const info = document.createElement('p');
+            info.className = 'fat-muted';
+            info.textContent = 'Original Attachment ID: ' + (imageMeta.original_attachment_id || '-') + ' | Featured PNG ID: ' + (imageMeta.featured_attachment_id || '-');
+            card.appendChild(info);
+
+            outputsWrap.appendChild(card);
+
+            ['title', 'alt_text', 'description'].forEach(function (key) {
+                const fieldCard = document.createElement('div');
+                fieldCard.className = 'fat-output-card';
+                const label = document.createElement('h3');
+                label.textContent = key === 'alt_text' ? 'Generated Alt Text' : ('Generated ' + key.charAt(0).toUpperCase() + key.slice(1));
+                fieldCard.appendChild(label);
+                const textarea = document.createElement('textarea');
+                textarea.readOnly = true;
+                textarea.rows = key === 'description' ? 5 : 2;
+                textarea.value = imageMeta[key] || '';
+                fieldCard.appendChild(textarea);
+                outputsWrap.appendChild(fieldCard);
+            });
+
+            const applyPanel = document.createElement('div');
+            applyPanel.className = 'fat-output-card fat-apply-panel';
+
+            const applyTitle = document.createElement('h3');
+            applyTitle.textContent = data.strings.applyPanelTitle || 'Apply to WordPress';
+            applyPanel.appendChild(applyTitle);
+
+            const targetWrap = document.createElement('div');
+            targetWrap.className = 'fat-field';
+            const targetLabel = document.createElement('label');
+            targetLabel.textContent = data.strings.applyTarget || 'Target';
+            targetWrap.appendChild(targetLabel);
+
+            const targetSelect = document.createElement('select');
+            targetSelect.className = 'fat-content-post-select';
+            targetWrap.appendChild(targetSelect);
+            applyPanel.appendChild(targetWrap);
+
+            buildOptions(targetSelect, [], data.strings.choosePost || 'Choose a post', function (post) {
+                return post.title || ('#' + post.id);
+            });
+
+            Promise.all([loadPostsForStatus('draft'), loadPostsForStatus('publish')]).then(function (result) {
+                const posts = (result[0] || []).concat(result[1] || []);
+                const deduped = posts.filter(function (post, idx, all) {
+                    return all.findIndex(function (item) { return String(item.id) === String(post.id); }) === idx;
+                });
+                targetSelect.innerHTML = '';
+                buildOptions(targetSelect, deduped, data.strings.choosePost || 'Choose a post', function (post) {
+                    return post.title || ('#' + post.id);
+                });
+            });
+
+            const applyButton = document.createElement('button');
+            applyButton.type = 'button';
+            applyButton.className = 'button button-secondary fat-apply-button';
+            applyButton.textContent = data.strings.applyFeaturedImage || 'Apply as Featured Image';
+            applyButton.disabled = true;
+            applyPanel.appendChild(applyButton);
+
+            targetSelect.addEventListener('change', function () {
+                runState.targetId = targetSelect.value || '';
+                applyButton.disabled = !runState.targetId;
+            });
+
+            applyButton.addEventListener('click', async function () {
+                if (!runState.targetId) {
+                    setStatus(data.strings.applyTargetRequired || 'Please choose a target before applying.', 'error');
+                    return;
+                }
+
+                submit.disabled = true;
+                applyButton.disabled = true;
+                setStatus(data.strings.running || 'Running…', 'loading');
+
+                try {
+                    const response = await fetch(data.applyUrl || '', {
+                        method: 'POST',
+                        credentials: 'same-origin',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-WP-Nonce': data.nonce
+                        },
+                        body: JSON.stringify({
+                            tool_id: selectedTool().id,
+                            target_type: 'post',
+                            target_id: parseInt(runState.targetId, 10),
+                            image_attachment_id: featuredAttachmentId,
+                            outputs: {},
+                            apply_fields: ['featured_image']
+                        })
+                    });
+
+                    const payload = await response.json();
+                    if (!response.ok || !payload.success) {
+                        throw new Error((payload && payload.message) ? payload.message : (data.strings.applyError || 'Unable to apply selected outputs.'));
+                    }
+
+                    setStatus(data.strings.applyFeaturedSuccess || 'Featured image was applied successfully.', 'success');
+                } catch (error) {
+                    setStatus(error.message || data.strings.applyError || 'Unable to apply selected outputs.', 'error');
+                } finally {
+                    submit.disabled = false;
+                    applyButton.disabled = !runState.targetId;
+                }
+            });
+
+            outputsWrap.appendChild(applyPanel);
+        }
+
         function renderOutputs(tool, outputs, meta) {
             outputsWrap.innerHTML = '';
 
@@ -733,6 +874,11 @@
             metaLine.className = 'fat-output-meta';
             metaLine.textContent = 'Model: ' + (meta.model || '') + ' | Latency: ' + (meta.latency_ms || 0) + ' ms';
             outputsWrap.appendChild(metaLine);
+
+            if (meta && meta.workflow === 'featured_image_generator') {
+                renderFeaturedImageOutput(meta);
+                return;
+            }
 
             (tool.output_schema || []).forEach(function (field) {
                 const value = outputs[field.key] || '';
@@ -791,6 +937,11 @@
             (tool.input_schema || []).forEach(function (field) {
                 inputs[field.key] = formData.get(field.key) || '';
             });
+
+            if (isFeaturedImageWorkflow(tool) && !String(inputs.prompt || '').trim()) {
+                setStatus(data.strings.imagePromptRequired || 'Please enter an image prompt.', 'error');
+                return;
+            }
 
             if (contentSourceState.controls) {
                 inputs.__fat_article_source = contentSourceState.source;
