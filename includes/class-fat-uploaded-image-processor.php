@@ -178,9 +178,16 @@ class FAT_Uploaded_Image_Processor {
             return new WP_Error( 'fat_uploaded_image_editor_failed', $editor->get_error_message(), array( 'status' => 500 ) );
         }
 
-        $resized = $editor->resize( absint( $width ), absint( $height ), true );
+        $target_width  = absint( $width );
+        $target_height = absint( $height );
+        $resized       = $editor->resize( $target_width, $target_height, true );
         if ( is_wp_error( $resized ) ) {
-            return new WP_Error( 'fat_uploaded_resize_failed', $resized->get_error_message(), array( 'status' => 500 ) );
+            $fallback = $this->create_webp_derivative_with_gd( $source_path, $target_width, $target_height );
+            if ( is_wp_error( $fallback ) ) {
+                return new WP_Error( 'fat_uploaded_resize_failed', $resized->get_error_message(), array( 'status' => 500 ) );
+            }
+
+            return $fallback;
         }
 
         $dest_path = trailingslashit( dirname( $source_path ) ) . wp_basename( $source_path, '.' . pathinfo( $source_path, PATHINFO_EXTENSION ) ) . '-processed-1200x675.webp';
@@ -194,6 +201,92 @@ class FAT_Uploaded_Image_Processor {
         }
 
         return $saved;
+    }
+
+    protected function create_webp_derivative_with_gd( $source_path, $target_width, $target_height ) {
+        if ( ! function_exists( 'imagecreatefromstring' ) || ! function_exists( 'imagewebp' ) ) {
+            return new WP_Error( 'fat_uploaded_resize_no_gd', __( 'Server is missing required GD image functions for uploaded image processing.', 'fabled-ai-tools' ), array( 'status' => 500 ) );
+        }
+
+        $raw = file_get_contents( $source_path );
+        if ( false === $raw || '' === $raw ) {
+            return new WP_Error( 'fat_uploaded_resize_read_failed', __( 'Unable to read uploaded image data for processing.', 'fabled-ai-tools' ), array( 'status' => 500 ) );
+        }
+
+        $source_image = imagecreatefromstring( $raw );
+        if ( ! $source_image ) {
+            return new WP_Error( 'fat_uploaded_resize_decode_failed', __( 'Unable to decode uploaded image for processing.', 'fabled-ai-tools' ), array( 'status' => 500 ) );
+        }
+
+        $source_width  = imagesx( $source_image );
+        $source_height = imagesy( $source_image );
+        if ( $source_width <= 0 || $source_height <= 0 ) {
+            imagedestroy( $source_image );
+            return new WP_Error( 'fat_uploaded_resize_invalid_dimensions', __( 'Uploaded image dimensions are invalid.', 'fabled-ai-tools' ), array( 'status' => 500 ) );
+        }
+
+        $target_ratio = $target_width / $target_height;
+        $source_ratio = $source_width / $source_height;
+
+        $crop_width  = $source_width;
+        $crop_height = $source_height;
+        $src_x       = 0;
+        $src_y       = 0;
+
+        if ( $source_ratio > $target_ratio ) {
+            $crop_width = (int) floor( $source_height * $target_ratio );
+            $src_x      = (int) floor( ( $source_width - $crop_width ) / 2 );
+        } elseif ( $source_ratio < $target_ratio ) {
+            $crop_height = (int) floor( $source_width / $target_ratio );
+            $src_y       = (int) floor( ( $source_height - $crop_height ) / 2 );
+        }
+
+        $dest_image = imagecreatetruecolor( $target_width, $target_height );
+        if ( ! $dest_image ) {
+            imagedestroy( $source_image );
+            return new WP_Error( 'fat_uploaded_resize_canvas_failed', __( 'Unable to allocate image canvas for processing.', 'fabled-ai-tools' ), array( 'status' => 500 ) );
+        }
+
+        imagealphablending( $dest_image, true );
+        imagesavealpha( $dest_image, true );
+
+        $copied = imagecopyresampled(
+            $dest_image,
+            $source_image,
+            0,
+            0,
+            $src_x,
+            $src_y,
+            $target_width,
+            $target_height,
+            $crop_width,
+            $crop_height
+        );
+
+        if ( ! $copied ) {
+            imagedestroy( $dest_image );
+            imagedestroy( $source_image );
+            return new WP_Error( 'fat_uploaded_resize_resample_failed', __( 'Unable to crop and resize uploaded image.', 'fabled-ai-tools' ), array( 'status' => 500 ) );
+        }
+
+        $dest_path = trailingslashit( dirname( $source_path ) ) . wp_basename( $source_path, '.' . pathinfo( $source_path, PATHINFO_EXTENSION ) ) . '-processed-1200x675.webp';
+        $saved     = imagewebp( $dest_image, $dest_path, 85 );
+
+        imagedestroy( $dest_image );
+        imagedestroy( $source_image );
+
+        if ( ! $saved || ! file_exists( $dest_path ) ) {
+            return new WP_Error( 'fat_uploaded_resize_save_failed', __( 'Unable to save processed uploaded image.', 'fabled-ai-tools' ), array( 'status' => 500 ) );
+        }
+
+        return array(
+            'path'      => $dest_path,
+            'file'      => wp_basename( $dest_path ),
+            'width'     => $target_width,
+            'height'    => $target_height,
+            'mime-type' => 'image/webp',
+            'filesize'  => (int) filesize( $dest_path ),
+        );
     }
 
     protected function save_processed_attachment( $path, $original_filename ) {
