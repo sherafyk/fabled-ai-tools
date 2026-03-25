@@ -13,8 +13,9 @@ class FAT_Admin {
     protected $tool_runner;
     protected $client;
     protected $entity_query_service;
+    protected $builtin_tools;
 
-    public function __construct( FAT_Settings $settings, FAT_Tools_Repository $tools_repo, FAT_Runs_Repository $runs_repo, FAT_Tool_Validator $validator, FAT_Prompt_Engine $prompt_engine, FAT_Tool_Runner $tool_runner, FAT_OpenAI_Client $client, FAT_Entity_Query_Service $entity_query_service ) {
+    public function __construct( FAT_Settings $settings, FAT_Tools_Repository $tools_repo, FAT_Runs_Repository $runs_repo, FAT_Tool_Validator $validator, FAT_Prompt_Engine $prompt_engine, FAT_Tool_Runner $tool_runner, FAT_OpenAI_Client $client, FAT_Entity_Query_Service $entity_query_service, FAT_Builtin_Tools $builtin_tools ) {
         $this->settings      = $settings;
         $this->tools_repo    = $tools_repo;
         $this->runs_repo     = $runs_repo;
@@ -23,6 +24,7 @@ class FAT_Admin {
         $this->tool_runner   = $tool_runner;
         $this->client        = $client;
         $this->entity_query_service = $entity_query_service;
+        $this->builtin_tools = $builtin_tools;
     }
 
     public function hooks() {
@@ -33,6 +35,7 @@ class FAT_Admin {
         add_action( 'admin_post_fat_tool_action', array( $this, 'handle_tool_action' ) );
         add_action( 'admin_post_fat_test_openai_connection', array( $this, 'handle_test_openai_connection' ) );
         add_action( 'admin_post_fat_purge_logs', array( $this, 'handle_purge_logs' ) );
+        add_action( 'admin_post_fat_import_tool', array( $this, 'handle_import_tool' ) );
         add_action( 'wp_ajax_fat_runner_posts', array( $this, 'handle_runner_posts_lookup' ) );
         add_action( 'wp_ajax_fat_runner_attachments', array( $this, 'handle_runner_attachments_lookup' ) );
     }
@@ -316,8 +319,36 @@ class FAT_Admin {
                 break;
 
             case 'delete':
+                if ( $this->builtin_tools->is_builtin_tool( $tool ) ) {
+                    $redirect = add_query_arg( 'fat_error', rawurlencode( __( 'Built-in tools cannot be deleted. Use reset instead.', 'fabled-ai-tools' ) ), $redirect );
+                    break;
+                }
+
                 $this->tools_repo->delete( $tool_id );
                 $redirect = add_query_arg( 'fat_notice', rawurlencode( __( 'Tool deleted.', 'fabled-ai-tools' ) ), $redirect );
+                break;
+
+            case 'reset_default':
+                $result = $this->builtin_tools->reset_tool_to_defaults( $tool_id );
+                if ( is_wp_error( $result ) ) {
+                    $redirect = add_query_arg( 'fat_error', rawurlencode( $result->get_error_message() ), $redirect );
+                } else {
+                    $redirect = FAT_Helpers::admin_url_with_notice(
+                        'fat-tool-edit',
+                        array(
+                            'id'         => $tool_id,
+                            'fat_notice' => __( 'Built-in tool reset to defaults.', 'fabled-ai-tools' ),
+                        )
+                    );
+                }
+                break;
+
+            case 'export':
+                $this->download_tool_export( $tool );
+                exit;
+
+            default:
+                $redirect = add_query_arg( 'fat_error', rawurlencode( __( 'Unknown tool action.', 'fabled-ai-tools' ) ), $redirect );
                 break;
         }
 
@@ -391,6 +422,18 @@ class FAT_Admin {
                 <a class="page-title-action" href="<?php echo esc_url( admin_url( 'admin.php?page=fat-tool-edit' ) ); ?>"><?php esc_html_e( 'Add New', 'fabled-ai-tools' ); ?></a>
             </div>
 
+            <div class="fat-card">
+                <h2><?php esc_html_e( 'Import Tool', 'fabled-ai-tools' ); ?></h2>
+                <form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>">
+                    <input type="hidden" name="action" value="fat_import_tool" />
+                    <?php wp_nonce_field( 'fat_import_tool' ); ?>
+                    <p>
+                        <textarea name="tool_export_json" rows="8" class="large-text code" placeholder="<?php esc_attr_e( 'Paste exported tool JSON here.', 'fabled-ai-tools' ); ?>"></textarea>
+                    </p>
+                    <?php submit_button( __( 'Import Tool', 'fabled-ai-tools' ), 'secondary', 'submit', false ); ?>
+                </form>
+            </div>
+
             <div class="fat-card fat-table-card">
                 <table class="widefat striped fat-table">
                     <thead>
@@ -413,6 +456,9 @@ class FAT_Admin {
                             <tr>
                                 <td>
                                     <strong><a href="<?php echo esc_url( admin_url( 'admin.php?page=fat-tool-edit&id=' . (int) $tool['id'] ) ); ?>"><?php echo esc_html( $tool['name'] ); ?></a></strong>
+                                    <?php if ( $this->builtin_tools->is_builtin_tool( $tool ) ) : ?>
+                                        <span class="fat-pill"><?php esc_html_e( 'Built-in', 'fabled-ai-tools' ); ?></span>
+                                    <?php endif; ?>
                                     <?php if ( ! empty( $tool['description'] ) ) : ?>
                                         <div class="fat-muted"><?php echo esc_html( $tool['description'] ); ?></div>
                                     <?php endif; ?>
@@ -444,11 +490,18 @@ class FAT_Admin {
                                 <td>
                                     <a href="<?php echo esc_url( admin_url( 'admin.php?page=fat-tool-edit&id=' . (int) $tool['id'] ) ); ?>"><?php esc_html_e( 'Edit', 'fabled-ai-tools' ); ?></a>
                                     |
+                                    <a href="<?php echo esc_url( $this->tool_action_url( 'export', $tool['id'] ) ); ?>"><?php esc_html_e( 'Export', 'fabled-ai-tools' ); ?></a>
+                                    |
                                     <a href="<?php echo esc_url( $this->tool_action_url( 'duplicate', $tool['id'] ) ); ?>"><?php esc_html_e( 'Duplicate', 'fabled-ai-tools' ); ?></a>
                                     |
                                     <a href="<?php echo esc_url( $this->tool_action_url( 'toggle', $tool['id'] ) ); ?>"><?php echo ! empty( $tool['is_active'] ) ? esc_html__( 'Deactivate', 'fabled-ai-tools' ) : esc_html__( 'Activate', 'fabled-ai-tools' ); ?></a>
-                                    |
-                                    <a href="<?php echo esc_url( $this->tool_action_url( 'delete', $tool['id'] ) ); ?>" onclick="return confirm('<?php echo esc_js( __( 'Delete this tool?', 'fabled-ai-tools' ) ); ?>');"><?php esc_html_e( 'Delete', 'fabled-ai-tools' ); ?></a>
+                                    <?php if ( $this->builtin_tools->is_builtin_tool( $tool ) ) : ?>
+                                        |
+                                        <a href="<?php echo esc_url( $this->tool_action_url( 'reset_default', $tool['id'] ) ); ?>" onclick="return confirm('<?php echo esc_js( __( 'Reset this built-in tool to its default configuration?', 'fabled-ai-tools' ) ); ?>');"><?php esc_html_e( 'Reset', 'fabled-ai-tools' ); ?></a>
+                                    <?php else : ?>
+                                        |
+                                        <a href="<?php echo esc_url( $this->tool_action_url( 'delete', $tool['id'] ) ); ?>" onclick="return confirm('<?php echo esc_js( __( 'Delete this tool?', 'fabled-ai-tools' ) ); ?>');"><?php esc_html_e( 'Delete', 'fabled-ai-tools' ); ?></a>
+                                    <?php endif; ?>
                                 </td>
                             </tr>
                         <?php endforeach; ?>
@@ -467,6 +520,7 @@ class FAT_Admin {
 
         $tool_id = isset( $_GET['id'] ) ? absint( $_GET['id'] ) : 0;
         $tool    = $tool_id ? $this->tools_repo->get_by_id( $tool_id ) : $this->default_tool();
+        $is_builtin_tool = $tool && $this->builtin_tools->is_builtin_tool( $tool );
 
         if ( $tool_id && ! $tool ) {
             echo '<div class="wrap"><div class="notice notice-error"><p>' . esc_html__( 'Tool not found.', 'fabled-ai-tools' ) . '</p></div></div>';
@@ -493,6 +547,20 @@ class FAT_Admin {
         ?>
         <div class="wrap fat-wrap">
             <h1><?php echo $tool_id ? esc_html__( 'Edit Tool', 'fabled-ai-tools' ) : esc_html__( 'Add Tool', 'fabled-ai-tools' ); ?></h1>
+
+            <?php if ( $is_builtin_tool ) : ?>
+                <div class="notice notice-info inline">
+                    <p>
+                        <strong><?php esc_html_e( 'Built-in workflow tool.', 'fabled-ai-tools' ); ?></strong>
+                        <?php esc_html_e( 'This tool is seeded by the plugin and can be reset to its default settings.', 'fabled-ai-tools' ); ?>
+                        <a href="<?php echo esc_url( $this->tool_action_url( 'reset_default', $tool['id'] ) ); ?>" onclick="return confirm('<?php echo esc_js( __( 'Reset this built-in tool to its default configuration?', 'fabled-ai-tools' ) ); ?>');"><?php esc_html_e( 'Reset now', 'fabled-ai-tools' ); ?></a>
+                        |
+                        <a href="<?php echo esc_url( $this->tool_action_url( 'export', $tool['id'] ) ); ?>"><?php esc_html_e( 'Export JSON', 'fabled-ai-tools' ); ?></a>
+                    </p>
+                </div>
+            <?php elseif ( $tool_id ) : ?>
+                <p><a href="<?php echo esc_url( $this->tool_action_url( 'export', $tool['id'] ) ); ?>"><?php esc_html_e( 'Export this tool as JSON', 'fabled-ai-tools' ); ?></a></p>
+            <?php endif; ?>
 
             <form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>">
                 <input type="hidden" name="action" value="fat_save_tool" />
@@ -649,6 +717,15 @@ class FAT_Admin {
                         <?php foreach ( (array) FAT_Helpers::array_get( $wp_integration_form, 'workflow_config', array() ) as $workflow_key => $workflow_value ) : ?>
                             <input type="hidden" name="wp_integration_workflow_config[<?php echo esc_attr( $workflow_key ); ?>]" value="<?php echo esc_attr( $workflow_value ); ?>" />
                         <?php endforeach; ?>
+                        <p class="description">
+                            <?php
+                            printf(
+                                /* translators: %s: workflow machine name */
+                                esc_html__( 'Workflow type: %s (managed by built-in workflow defaults).', 'fabled-ai-tools' ),
+                                esc_html( $wp_integration_form['workflow'] )
+                            );
+                            ?>
+                        </p>
                     <?php endif; ?>
                     <table class="form-table" role="presentation">
                         <tr>
@@ -1037,6 +1114,117 @@ class FAT_Admin {
                 'next_page'   => FAT_Helpers::array_get( $result, 'next_page', null ),
             )
         );
+    }
+
+
+    public function handle_import_tool() {
+        if ( ! $this->current_user_can_manage_tools() ) {
+            wp_die( esc_html__( 'You are not allowed to manage tools.', 'fabled-ai-tools' ) );
+        }
+
+        check_admin_referer( 'fat_import_tool' );
+
+        $raw = isset( $_POST['tool_export_json'] ) ? wp_unslash( $_POST['tool_export_json'] ) : '';
+        $raw = is_string( $raw ) ? trim( $raw ) : '';
+        if ( '' === $raw ) {
+            wp_safe_redirect( FAT_Helpers::admin_url_with_notice( 'fat-tools', array( 'fat_error' => __( 'Import JSON is required.', 'fabled-ai-tools' ) ) ) );
+            exit;
+        }
+
+        $payload = json_decode( $raw, true );
+        if ( ! is_array( $payload ) ) {
+            wp_safe_redirect( FAT_Helpers::admin_url_with_notice( 'fat-tools', array( 'fat_error' => __( 'Invalid JSON payload.', 'fabled-ai-tools' ) ) ) );
+            exit;
+        }
+
+        $tool_data = $this->tool_data_from_export_payload( $payload );
+        if ( is_wp_error( $tool_data ) ) {
+            wp_safe_redirect( FAT_Helpers::admin_url_with_notice( 'fat-tools', array( 'fat_error' => $tool_data->get_error_message() ) ) );
+            exit;
+        }
+
+        $validation = $this->validator->validate_tool( $tool_data, $this->tools_repo, 0 );
+        if ( ! empty( $validation['errors'] ) ) {
+            wp_safe_redirect( FAT_Helpers::admin_url_with_notice( 'fat-tools', array( 'fat_error' => implode( ' ', $validation['errors'] ) ) ) );
+            exit;
+        }
+
+        $slug = FAT_Helpers::array_get( $tool_data, 'slug', '' );
+        if ( $this->tools_repo->exists_slug( $slug ) ) {
+            $tool_data['slug'] = $slug . '-import-' . wp_generate_password( 4, false, false );
+        }
+
+        $created = $this->tools_repo->create( $tool_data );
+        if ( is_wp_error( $created ) ) {
+            wp_safe_redirect( FAT_Helpers::admin_url_with_notice( 'fat-tools', array( 'fat_error' => $created->get_error_message() ) ) );
+            exit;
+        }
+
+        wp_safe_redirect(
+            FAT_Helpers::admin_url_with_notice(
+                'fat-tool-edit',
+                array(
+                    'id'         => (int) $created['id'],
+                    'fat_notice' => __( 'Tool imported successfully.', 'fabled-ai-tools' ),
+                )
+            )
+        );
+        exit;
+    }
+
+    protected function download_tool_export( $tool ) {
+        $payload = array(
+            'exported_at' => gmdate( 'c' ),
+            'plugin'      => 'fabled-ai-tools',
+            'version'     => FAT_VERSION,
+            'tool'        => $this->normalize_tool_for_export( $tool ),
+        );
+
+        $filename = sanitize_title( FAT_Helpers::array_get( $tool, 'slug', 'tool' ) ) . '-fat-tool.json';
+
+        nocache_headers();
+        header( 'Content-Type: application/json; charset=utf-8' );
+        header( 'Content-Disposition: attachment; filename=' . $filename );
+
+        echo wp_json_encode( $payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES );
+    }
+
+    protected function normalize_tool_for_export( $tool ) {
+        $tool = is_array( $tool ) ? $tool : array();
+        unset( $tool['id'], $tool['created_at'], $tool['updated_at'] );
+
+        return array(
+            'name'                 => sanitize_text_field( FAT_Helpers::array_get( $tool, 'name', '' ) ),
+            'slug'                 => FAT_Helpers::clean_slug( FAT_Helpers::array_get( $tool, 'slug', '' ) ),
+            'description'          => FAT_Helpers::sanitize_textarea_preserve_newlines( FAT_Helpers::array_get( $tool, 'description', '' ) ),
+            'is_active'            => ! empty( $tool['is_active'] ) ? 1 : 0,
+            'allowed_roles'        => FAT_Helpers::sanitize_roles_array( FAT_Helpers::array_get( $tool, 'allowed_roles', array() ) ),
+            'allowed_capabilities' => FAT_Helpers::sanitize_capabilities_list( FAT_Helpers::array_get( $tool, 'allowed_capabilities', array() ) ),
+            'model'                => sanitize_text_field( FAT_Helpers::array_get( $tool, 'model', '' ) ),
+            'system_prompt'        => FAT_Helpers::sanitize_textarea_preserve_newlines( FAT_Helpers::array_get( $tool, 'system_prompt', '' ) ),
+            'user_prompt_template' => FAT_Helpers::sanitize_textarea_preserve_newlines( FAT_Helpers::array_get( $tool, 'user_prompt_template', '' ) ),
+            'input_schema'         => $this->validator->normalize_input_schema( FAT_Helpers::array_get( $tool, 'input_schema', array() ) ),
+            'output_schema'        => $this->validator->normalize_output_schema( FAT_Helpers::array_get( $tool, 'output_schema', array() ) ),
+            'wp_integration'       => $this->validator->normalize_wp_integration( FAT_Helpers::array_get( $tool, 'wp_integration', array() ) ),
+            'max_input_chars'      => max( 1, absint( FAT_Helpers::array_get( $tool, 'max_input_chars', 20000 ) ) ),
+            'max_output_tokens'    => max( 1, absint( FAT_Helpers::array_get( $tool, 'max_output_tokens', 700 ) ) ),
+            'daily_run_limit'      => max( 0, absint( FAT_Helpers::array_get( $tool, 'daily_run_limit', 0 ) ) ),
+            'log_inputs'           => ! empty( $tool['log_inputs'] ) ? 1 : 0,
+            'log_outputs'          => ! empty( $tool['log_outputs'] ) ? 1 : 0,
+            'sort_order'           => intval( FAT_Helpers::array_get( $tool, 'sort_order', 0 ) ),
+        );
+    }
+
+    protected function tool_data_from_export_payload( $payload ) {
+        if ( isset( $payload['tool'] ) && is_array( $payload['tool'] ) ) {
+            return $this->normalize_tool_for_export( $payload['tool'] );
+        }
+
+        if ( isset( $payload['name'] ) ) {
+            return $this->normalize_tool_for_export( $payload );
+        }
+
+        return new WP_Error( 'fat_invalid_tool_import', __( 'Import payload is missing a tool definition.', 'fabled-ai-tools' ) );
     }
 
     protected function build_tool_data_from_request() {
