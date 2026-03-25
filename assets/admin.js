@@ -988,8 +988,8 @@
                     return post.title || ('#' + post.id);
                 },
                 fetcher: async function (params) {
-                    const draftResult = await fetchEntityList('posts', { status: 'draft', q: params.q, page: params.page, per_page: Math.ceil(params.per_page / 2) });
-                    const publishResult = await fetchEntityList('posts', { status: 'publish', q: params.q, page: params.page, per_page: Math.ceil(params.per_page / 2) });
+                    const draftResult = await fetchEntityList('posts', { status: 'draft', q: params.q, page: params.page, per_page: Math.ceil(params.per_page / 2), featured_support: 1 });
+                    const publishResult = await fetchEntityList('posts', { status: 'publish', q: params.q, page: params.page, per_page: Math.ceil(params.per_page / 2), featured_support: 1 });
                     const merged = (draftResult.items || []).concat(
                         (publishResult.items || []).filter(function (post) {
                             return !(draftResult.items || []).some(function (draftPost) {
@@ -1123,8 +1123,8 @@
                     return post.title || ('#' + post.id);
                 },
                 fetcher: async function (params) {
-                    const draftResult = await fetchEntityList('posts', { status: 'draft', q: params.q, page: params.page, per_page: Math.ceil(params.per_page / 2) });
-                    const publishResult = await fetchEntityList('posts', { status: 'publish', q: params.q, page: params.page, per_page: Math.ceil(params.per_page / 2) });
+                    const draftResult = await fetchEntityList('posts', { status: 'draft', q: params.q, page: params.page, per_page: Math.ceil(params.per_page / 2), featured_support: 1 });
+                    const publishResult = await fetchEntityList('posts', { status: 'publish', q: params.q, page: params.page, per_page: Math.ceil(params.per_page / 2), featured_support: 1 });
                     const merged = (draftResult.items || []).concat(
                         (publishResult.items || []).filter(function (post) {
                             return !(draftResult.items || []).some(function (draftPost) {

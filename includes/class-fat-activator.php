@@ -12,6 +12,7 @@ class FAT_Activator {
         self::maybe_backfill_seeded_wp_integration();
         self::maybe_seed_missing_featured_image_generator();
         self::maybe_seed_missing_uploaded_image_processor();
+        self::maybe_seed_missing_attachment_metadata_assistant();
         self::maybe_repair_corrupted_seeded_tools();
         self::ensure_scheduled_events();
         update_option( 'fat_db_version', FAT_DB_VERSION );
@@ -28,6 +29,7 @@ class FAT_Activator {
         // Keep missing built-ins backfilled even when schema version is unchanged.
         self::maybe_seed_missing_featured_image_generator();
         self::maybe_seed_missing_uploaded_image_processor();
+        self::maybe_seed_missing_attachment_metadata_assistant();
         self::ensure_scheduled_events();
 
         $installed = get_option( 'fat_db_version', '' );
@@ -37,6 +39,7 @@ class FAT_Activator {
             self::maybe_backfill_seeded_wp_integration();
             self::maybe_seed_missing_featured_image_generator();
             self::maybe_seed_missing_uploaded_image_processor();
+            self::maybe_seed_missing_attachment_metadata_assistant();
             self::maybe_repair_corrupted_seeded_tools();
             self::ensure_scheduled_events();
             update_option( 'fat_db_version', FAT_DB_VERSION );
@@ -200,6 +203,10 @@ class FAT_Activator {
 
         $repo->create(
             self::uploaded_image_processor_blueprint( $common_roles )
+        );
+
+        $repo->create(
+            self::attachment_metadata_assistant_blueprint( $common_roles )
         );
 
         $repo->create(
@@ -464,6 +471,7 @@ class FAT_Activator {
         return array(
             'featured-image-generator' => self::featured_image_generator_blueprint( array( 'administrator', 'editor', 'author' ) ),
             'uploaded-image-processor' => self::uploaded_image_processor_blueprint( array( 'administrator', 'editor', 'author' ) ),
+            'attachment-metadata-assistant' => self::attachment_metadata_assistant_blueprint( array( 'administrator', 'editor', 'author' ) ),
             'seo-excerpt' => array(
                 'name'                 => 'SEO Excerpt',
                 'slug'                 => 'seo-excerpt',
@@ -631,6 +639,16 @@ class FAT_Activator {
         $repo->create( self::uploaded_image_processor_blueprint( array( 'administrator', 'editor', 'author' ) ) );
     }
 
+    protected static function maybe_seed_missing_attachment_metadata_assistant() {
+        $repo = new FAT_Tools_Repository();
+        $tool = $repo->get_by_slug( 'attachment-metadata-assistant' );
+        if ( $tool ) {
+            return;
+        }
+
+        $repo->create( self::attachment_metadata_assistant_blueprint( array( 'administrator', 'editor', 'author' ) ) );
+    }
+
     protected static function uploaded_image_processor_blueprint( $roles ) {
         return array(
             'name'                 => 'Uploaded Image Processor',
@@ -697,6 +715,88 @@ class FAT_Activator {
             'log_inputs'           => 1,
             'log_outputs'          => 1,
             'sort_order'           => 16,
+        );
+    }
+
+    protected static function attachment_metadata_assistant_blueprint( $roles ) {
+        return array(
+            'name'                 => 'Attachment Metadata Assistant',
+            'slug'                 => 'attachment-metadata-assistant',
+            'description'          => 'Generates attachment title, alt text, and description from an existing Media Library image.',
+            'is_active'            => 1,
+            'allowed_roles'        => $roles,
+            'allowed_capabilities' => array(),
+            'model'                => '',
+            'system_prompt'        => 'This built-in workflow generates metadata for an existing attachment. Prompt text is optional context only.',
+            'user_prompt_template' => '{{input.prompt}}',
+            'input_schema'         => array(
+                array(
+                    'key'         => 'prompt',
+                    'label'       => 'Optional Context',
+                    'type'        => 'textarea',
+                    'required'    => 0,
+                    'help_text'   => 'Optional editorial context for metadata generation.',
+                    'placeholder' => 'Optional context for title/alt/description',
+                    'max_length'  => 800,
+                ),
+            ),
+            'output_schema'        => array(
+                array(
+                    'key'      => 'title',
+                    'label'    => 'Generated Title',
+                    'type'     => 'text',
+                    'copyable' => 1,
+                ),
+                array(
+                    'key'      => 'alt_text',
+                    'label'    => 'Generated Alt Text',
+                    'type'     => 'text',
+                    'copyable' => 1,
+                ),
+                array(
+                    'key'      => 'description',
+                    'label'    => 'Generated Description',
+                    'type'     => 'long_text',
+                    'copyable' => 1,
+                ),
+            ),
+            'wp_integration'       => array(
+                'workflow' => 'attachment_metadata_assistant',
+                'workflow_config' => array(),
+                'source' => array(
+                    'type'             => 'attachment',
+                    'allow_manual'     => 0,
+                    'allow_draft'      => 0,
+                    'allow_publish'    => 0,
+                    'allow_attachment' => 1,
+                ),
+                'apply' => array(
+                    'target'   => 'attachment',
+                    'mappings' => array(
+                        array(
+                            'output_key' => 'title',
+                            'wp_field'   => 'post_title',
+                            'label'      => 'Attachment Title',
+                        ),
+                        array(
+                            'output_key' => 'alt_text',
+                            'wp_field'   => 'alt_text',
+                            'label'      => 'Alt Text',
+                        ),
+                        array(
+                            'output_key' => 'description',
+                            'wp_field'   => 'post_content',
+                            'label'      => 'Description',
+                        ),
+                    ),
+                ),
+            ),
+            'max_input_chars'      => 1200,
+            'max_output_tokens'    => 250,
+            'daily_run_limit'      => 30,
+            'log_inputs'           => 1,
+            'log_outputs'          => 1,
+            'sort_order'           => 17,
         );
     }
 

@@ -35,10 +35,37 @@ class FAT_Entity_Query_Service {
         return (array) FAT_Helpers::array_get( $result, 'items', array() );
     }
 
+
+    public function get_featured_image_supported_post_types() {
+        $objects = get_post_types( array( 'public' => true ), 'objects' );
+        $types   = array();
+
+        foreach ( (array) $objects as $post_type => $object ) {
+            if ( 'attachment' === $post_type ) {
+                continue;
+            }
+            if ( ! post_type_supports( $post_type, 'thumbnail' ) ) {
+                continue;
+            }
+            $types[] = sanitize_key( $post_type );
+        }
+
+        if ( empty( $types ) ) {
+            $types[] = 'post';
+        }
+
+        return array_values( array_unique( $types ) );
+    }
+
     public function search_editable_posts_for_runner( $user, $args = array() ) {
         $user  = $this->normalize_user( $user );
         $status = sanitize_key( FAT_Helpers::array_get( $args, 'status', '' ) );
         $search = sanitize_text_field( FAT_Helpers::array_get( $args, 'search', '' ) );
+        $requested_post_types = (array) FAT_Helpers::array_get( $args, 'post_types', array( 'post' ) );
+        $post_types = array_values( array_filter( array_map( 'sanitize_key', $requested_post_types ) ) );
+        if ( empty( $post_types ) ) {
+            $post_types = array( 'post' );
+        }
         $page   = max( 1, absint( FAT_Helpers::array_get( $args, 'page', 1 ) ) );
         $per_page = min( self::MAX_PAGE_SIZE, max( 1, absint( FAT_Helpers::array_get( $args, 'per_page', self::DEFAULT_PAGE_SIZE ) ) ) );
 
@@ -56,7 +83,7 @@ class FAT_Entity_Query_Service {
 
         $raw_posts = $this->query_ids_with_capability_filter(
             array(
-                'post_type'              => 'post',
+                'post_type'              => $post_types,
                 'post_status'            => $status,
                 'posts_per_page'         => $per_page,
                 'paged'                  => $page,
@@ -72,9 +99,12 @@ class FAT_Entity_Query_Service {
 
         $items = array();
         foreach ( $raw_posts['ids'] as $post_id ) {
+            $post_type_obj = get_post_type_object( get_post_type( $post_id ) );
             $items[] = array(
                 'id'    => (int) $post_id,
                 'title' => html_entity_decode( get_the_title( $post_id ), ENT_QUOTES, get_bloginfo( 'charset' ) ),
+                'post_type' => sanitize_key( (string) get_post_type( $post_id ) ),
+                'post_type_label' => $post_type_obj ? (string) $post_type_obj->labels->singular_name : '',
             );
         }
 

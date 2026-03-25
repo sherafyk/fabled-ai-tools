@@ -1064,6 +1064,13 @@ class FAT_Admin {
         $search   = isset( $_GET['q'] ) ? sanitize_text_field( wp_unslash( $_GET['q'] ) ) : '';
         $page     = isset( $_GET['page'] ) ? max( 1, absint( $_GET['page'] ) ) : 1;
         $per_page = isset( $_GET['per_page'] ) ? min( 50, max( 1, absint( $_GET['per_page'] ) ) ) : 20;
+
+        $post_types = array( 'post' );
+        $featured_support = isset( $_GET['featured_support'] ) ? FAT_Helpers::to_bool_flag( wp_unslash( $_GET['featured_support'] ) ) : 0;
+        if ( ! empty( $featured_support ) ) {
+            $post_types = $this->entity_query_service->get_featured_image_supported_post_types();
+        }
+
         $result   = $this->entity_query_service->search_editable_posts_for_runner(
             wp_get_current_user(),
             array(
@@ -1071,6 +1078,7 @@ class FAT_Admin {
                 'search'   => $search,
                 'page'     => $page,
                 'per_page' => $per_page,
+                'post_types' => $post_types,
             )
         );
 

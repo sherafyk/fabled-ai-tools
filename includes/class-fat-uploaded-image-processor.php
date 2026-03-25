@@ -6,10 +6,12 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 class FAT_Uploaded_Image_Processor {
     protected $client;
+    protected $media_service;
     const DEFAULT_MAX_UPLOAD_BYTES = 10485760; // 10 MB.
 
-    public function __construct( FAT_OpenAI_Client $client ) {
-        $this->client = $client;
+    public function __construct( FAT_OpenAI_Client $client, FAT_Media_Service $media_service ) {
+        $this->client        = $client;
+        $this->media_service = $media_service;
     }
 
     public function execute( $tool, $inputs ) {
@@ -21,12 +23,12 @@ class FAT_Uploaded_Image_Processor {
         $target_size   = sanitize_text_field( FAT_Helpers::array_get( $workflow, 'target_size', '1200x675' ) );
         $target_format = sanitize_text_field( FAT_Helpers::array_get( $workflow, 'target_format', 'webp' ) );
 
-        if ( '1200x675' !== $target_size ) {
-            $target_size = '1200x675';
-        }
-        if ( 'webp' !== strtolower( $target_format ) ) {
+        $dimensions = $this->parse_dimensions( $target_size, 1200, 675 );
+        $target_size = $dimensions['width'] . 'x' . $dimensions['height'];
+        if ( ! in_array( strtolower( $target_format ), array( 'webp', 'png' ), true ) ) {
             $target_format = 'webp';
         }
+        $target_format = strtolower( $target_format );
 
         $uploaded_file = FAT_Helpers::array_get( $inputs, '__fat_uploaded_image_file', null );
         if ( ! is_array( $uploaded_file ) || empty( $uploaded_file['tmp_name'] ) ) {
@@ -55,7 +57,7 @@ class FAT_Uploaded_Image_Processor {
         $source_path = (string) FAT_Helpers::array_get( $prepared_upload, 'file', '' );
         $source_url  = (string) FAT_Helpers::array_get( $prepared_upload, 'url', '' );
 
-        $processed = $this->create_webp_derivative( $source_path, 1200, 675 );
+        $processed = $this->create_derivative( $source_path, $dimensions['width'], $dimensions['height'], $target_format );
         if ( is_wp_error( $processed ) ) {
             return $processed;
         }
@@ -67,7 +69,7 @@ class FAT_Uploaded_Image_Processor {
             'height' => (int) FAT_Helpers::array_get( $processed, 'height', 0 ),
         );
 
-        $attachment_id = $this->save_processed_attachment( $processed['path'], (string) FAT_Helpers::array_get( $uploaded_file, 'name', '' ) );
+        $attachment_id = $this->save_processed_attachment( (string) FAT_Helpers::array_get( $processed, 'path', '' ), (string) FAT_Helpers::array_get( $uploaded_file, 'name', '' ), (string) FAT_Helpers::array_get( $processed, 'mime-type', 'image/webp' ) );
         if ( is_wp_error( $attachment_id ) ) {
             return $attachment_id;
         }
@@ -77,14 +79,14 @@ class FAT_Uploaded_Image_Processor {
         );
 
         $warnings = array();
-        $metadata = $this->generate_image_metadata_for_attachment( $processed['path'], FAT_Helpers::array_get( $inputs, 'prompt', '' ) );
+        $metadata = $this->generate_image_metadata_for_attachment( (string) FAT_Helpers::array_get( $processed, 'path', '' ), (string) FAT_Helpers::array_get( $processed, 'mime-type', 'image/webp' ), FAT_Helpers::array_get( $inputs, 'prompt', '' ) );
         if ( is_wp_error( $metadata ) ) {
             $warnings[]             = $metadata->get_error_message();
             $diagnostics['metadata'] = array(
                 'status'  => 'fallback',
                 'message' => $metadata->get_error_message(),
             );
-            $metadata = $this->build_fallback_metadata( (string) FAT_Helpers::array_get( $uploaded_file, 'name', '' ) );
+            $metadata = $this->media_service->build_fallback_metadata( (string) FAT_Helpers::array_get( $uploaded_file, 'name', '' ) );
         } else {
             $diagnostics['metadata'] = array(
                 'status'     => 'success',
@@ -92,7 +94,7 @@ class FAT_Uploaded_Image_Processor {
             );
         }
 
-        $persisted = $this->persist_attachment_metadata( $attachment_id, $metadata );
+        $persisted = $this->media_service->persist_attachment_metadata( $attachment_id, $metadata );
         if ( is_wp_error( $persisted ) ) {
             return $persisted;
         }
@@ -168,156 +170,28 @@ class FAT_Uploaded_Image_Processor {
         return $moved;
     }
 
-    protected function create_webp_derivative( $source_path, $width, $height ) {
-        if ( ! $source_path || ! file_exists( $source_path ) ) {
-            return new WP_Error( 'fat_uploaded_source_missing', __( 'Uploaded image could not be found for processing.', 'fabled-ai-tools' ), array( 'status' => 500 ) );
-        }
-
-        $editor = wp_get_image_editor( $source_path );
-        if ( is_wp_error( $editor ) ) {
-            return new WP_Error( 'fat_uploaded_image_editor_failed', $editor->get_error_message(), array( 'status' => 500 ) );
-        }
-
-        $target_width  = absint( $width );
-        $target_height = absint( $height );
-        $resized       = $editor->resize( $target_width, $target_height, true );
-        if ( is_wp_error( $resized ) ) {
-            $fallback = $this->create_webp_derivative_with_gd( $source_path, $target_width, $target_height );
-            if ( is_wp_error( $fallback ) ) {
-                return new WP_Error( 'fat_uploaded_resize_failed', $resized->get_error_message(), array( 'status' => 500 ) );
-            }
-
-            return $fallback;
-        }
-
-        $dest_path = trailingslashit( dirname( $source_path ) ) . wp_basename( $source_path, '.' . pathinfo( $source_path, PATHINFO_EXTENSION ) ) . '-processed-1200x675.webp';
-        $saved     = $editor->save( $dest_path, 'image/webp' );
-
+    protected function create_derivative( $source_path, $width, $height, $format ) {
+        $saved = $this->media_service->create_image_derivative( $source_path, $width, $height, $format, 'processed' );
         if ( is_wp_error( $saved ) ) {
-            return new WP_Error( 'fat_uploaded_save_failed', $saved->get_error_message(), array( 'status' => 500 ) );
-        }
-        if ( empty( $saved['path'] ) || ! file_exists( $saved['path'] ) ) {
-            return new WP_Error( 'fat_uploaded_save_missing_file', __( 'Processed image file is missing after save.', 'fabled-ai-tools' ), array( 'status' => 500 ) );
+            return new WP_Error( 'fat_uploaded_processing_failed', $saved->get_error_message(), array( 'status' => 500 ) );
         }
 
         return $saved;
     }
 
-    protected function create_webp_derivative_with_gd( $source_path, $target_width, $target_height ) {
-        if ( ! function_exists( 'imagecreatefromstring' ) || ! function_exists( 'imagewebp' ) ) {
-            return new WP_Error( 'fat_uploaded_resize_no_gd', __( 'Server is missing required GD image functions for uploaded image processing.', 'fabled-ai-tools' ), array( 'status' => 500 ) );
-        }
-
-        $raw = file_get_contents( $source_path );
-        if ( false === $raw || '' === $raw ) {
-            return new WP_Error( 'fat_uploaded_resize_read_failed', __( 'Unable to read uploaded image data for processing.', 'fabled-ai-tools' ), array( 'status' => 500 ) );
-        }
-
-        $source_image = imagecreatefromstring( $raw );
-        if ( ! $source_image ) {
-            return new WP_Error( 'fat_uploaded_resize_decode_failed', __( 'Unable to decode uploaded image for processing.', 'fabled-ai-tools' ), array( 'status' => 500 ) );
-        }
-
-        $source_width  = imagesx( $source_image );
-        $source_height = imagesy( $source_image );
-        if ( $source_width <= 0 || $source_height <= 0 ) {
-            imagedestroy( $source_image );
-            return new WP_Error( 'fat_uploaded_resize_invalid_dimensions', __( 'Uploaded image dimensions are invalid.', 'fabled-ai-tools' ), array( 'status' => 500 ) );
-        }
-
-        $target_ratio = $target_width / $target_height;
-        $source_ratio = $source_width / $source_height;
-
-        $crop_width  = $source_width;
-        $crop_height = $source_height;
-        $src_x       = 0;
-        $src_y       = 0;
-
-        if ( $source_ratio > $target_ratio ) {
-            $crop_width = (int) floor( $source_height * $target_ratio );
-            $src_x      = (int) floor( ( $source_width - $crop_width ) / 2 );
-        } elseif ( $source_ratio < $target_ratio ) {
-            $crop_height = (int) floor( $source_width / $target_ratio );
-            $src_y       = (int) floor( ( $source_height - $crop_height ) / 2 );
-        }
-
-        $dest_image = imagecreatetruecolor( $target_width, $target_height );
-        if ( ! $dest_image ) {
-            imagedestroy( $source_image );
-            return new WP_Error( 'fat_uploaded_resize_canvas_failed', __( 'Unable to allocate image canvas for processing.', 'fabled-ai-tools' ), array( 'status' => 500 ) );
-        }
-
-        imagealphablending( $dest_image, true );
-        imagesavealpha( $dest_image, true );
-
-        $copied = imagecopyresampled(
-            $dest_image,
-            $source_image,
-            0,
-            0,
-            $src_x,
-            $src_y,
-            $target_width,
-            $target_height,
-            $crop_width,
-            $crop_height
-        );
-
-        if ( ! $copied ) {
-            imagedestroy( $dest_image );
-            imagedestroy( $source_image );
-            return new WP_Error( 'fat_uploaded_resize_resample_failed', __( 'Unable to crop and resize uploaded image.', 'fabled-ai-tools' ), array( 'status' => 500 ) );
-        }
-
-        $dest_path = trailingslashit( dirname( $source_path ) ) . wp_basename( $source_path, '.' . pathinfo( $source_path, PATHINFO_EXTENSION ) ) . '-processed-1200x675.webp';
-        $saved     = imagewebp( $dest_image, $dest_path, 85 );
-
-        imagedestroy( $dest_image );
-        imagedestroy( $source_image );
-
-        if ( ! $saved || ! file_exists( $dest_path ) ) {
-            return new WP_Error( 'fat_uploaded_resize_save_failed', __( 'Unable to save processed uploaded image.', 'fabled-ai-tools' ), array( 'status' => 500 ) );
-        }
-
-        return array(
-            'path'      => $dest_path,
-            'file'      => wp_basename( $dest_path ),
-            'width'     => $target_width,
-            'height'    => $target_height,
-            'mime-type' => 'image/webp',
-            'filesize'  => (int) filesize( $dest_path ),
-        );
-    }
-
-    protected function save_processed_attachment( $path, $original_filename ) {
+    protected function save_processed_attachment( $path, $original_filename, $mime_type ) {
         $title = $this->default_title_from_filename( $original_filename );
 
-        $attachment_id = wp_insert_attachment(
-            array(
-                'post_mime_type' => 'image/webp',
-                'post_title'     => $title,
-                'post_content'   => '',
-                'post_status'    => 'inherit',
-            ),
-            $path,
-            0,
-            true
-        );
+        $attachment_id = $this->media_service->insert_attachment_from_path( $path, $title, $mime_type );
 
         if ( is_wp_error( $attachment_id ) ) {
             return new WP_Error( 'fat_uploaded_attachment_create_failed', $attachment_id->get_error_message(), array( 'status' => 500 ) );
         }
 
-        require_once ABSPATH . 'wp-admin/includes/image.php';
-        $metadata = wp_generate_attachment_metadata( $attachment_id, $path );
-        if ( ! is_wp_error( $metadata ) && is_array( $metadata ) ) {
-            wp_update_attachment_metadata( $attachment_id, $metadata );
-        }
-
         return (int) $attachment_id;
     }
 
-    protected function generate_image_metadata_for_attachment( $processed_path, $prompt_context ) {
+    protected function generate_image_metadata_for_attachment( $processed_path, $mime_type, $prompt_context ) {
         $bytes = file_get_contents( $processed_path );
         if ( false === $bytes || '' === $bytes ) {
             return new WP_Error( 'fat_uploaded_metadata_file_read_failed', __( 'Processed image could not be read for metadata generation.', 'fabled-ai-tools' ), array( 'status' => 500 ) );
@@ -327,7 +201,7 @@ class FAT_Uploaded_Image_Processor {
             array(
                 'prompt'          => (string) $prompt_context,
                 'image_b64'       => base64_encode( $bytes ),
-                'image_mime_type' => 'image/webp',
+                'image_mime_type' => sanitize_text_field( (string) $mime_type ),
             )
         );
 
@@ -335,48 +209,27 @@ class FAT_Uploaded_Image_Processor {
             return $response;
         }
 
-        $metadata = (array) FAT_Helpers::array_get( $response, 'parsed', array() );
-        $metadata = array(
-            'title'       => sanitize_text_field( FAT_Helpers::array_get( $metadata, 'title', '' ) ),
-            'alt_text'    => sanitize_text_field( FAT_Helpers::array_get( $metadata, 'alt_text', '' ) ),
-            'description' => FAT_Helpers::sanitize_textarea_preserve_newlines( FAT_Helpers::array_get( $metadata, 'description', '' ) ),
-            '__meta'      => array(
-                'request_id' => (string) FAT_Helpers::array_get( $response, 'request_id', '' ),
-                'usage'      => FAT_Helpers::array_get( $response, 'usage', array() ),
-            ),
+        return $this->media_service->normalize_attachment_metadata(
+            (array) FAT_Helpers::array_get( $response, 'parsed', array() ),
+            (string) FAT_Helpers::array_get( $response, 'request_id', '' ),
+            (array) FAT_Helpers::array_get( $response, 'usage', array() )
         );
-
-        return $metadata;
     }
 
-    protected function persist_attachment_metadata( $attachment_id, $metadata ) {
-        $attachment_id = absint( $attachment_id );
-        if ( $attachment_id <= 0 ) {
-            return new WP_Error( 'fat_uploaded_metadata_invalid_attachment', __( 'Attachment is required to persist metadata.', 'fabled-ai-tools' ), array( 'status' => 400 ) );
+
+
+    protected function parse_dimensions( $raw_size, $default_width, $default_height ) {
+        if ( preg_match( '/^(\d{2,5})x(\d{2,5})$/', trim( (string) $raw_size ), $matches ) ) {
+            return array(
+                'width'  => max( 1, absint( $matches[1] ) ),
+                'height' => max( 1, absint( $matches[2] ) ),
+            );
         }
 
-        $title       = (string) FAT_Helpers::array_get( $metadata, 'title', '' );
-        $alt_text    = (string) FAT_Helpers::array_get( $metadata, 'alt_text', '' );
-        $description = (string) FAT_Helpers::array_get( $metadata, 'description', '' );
-
-        $updated = wp_update_post(
-            wp_slash(
-                array(
-                    'ID'           => $attachment_id,
-                    'post_title'   => '' !== $title ? $title : get_the_title( $attachment_id ),
-                    'post_content' => $description,
-                )
-            ),
-            true
+        return array(
+            'width'  => absint( $default_width ),
+            'height' => absint( $default_height ),
         );
-
-        if ( is_wp_error( $updated ) ) {
-            return new WP_Error( 'fat_uploaded_metadata_save_failed', $updated->get_error_message(), array( 'status' => 500 ) );
-        }
-
-        update_post_meta( $attachment_id, '_wp_attachment_image_alt', $alt_text );
-
-        return true;
     }
 
     protected function allowed_image_mimes() {
@@ -397,7 +250,7 @@ class FAT_Uploaded_Image_Processor {
             return __( 'Processed Uploaded Image', 'fabled-ai-tools' );
         }
 
-        return sanitize_text_field( $base );
+        return $this->media_service->default_title_from_label( $base );
     }
 
     protected function max_upload_size_bytes() {
@@ -413,19 +266,6 @@ class FAT_Uploaded_Image_Processor {
         return max( 1, $limit );
     }
 
-    protected function build_fallback_metadata( $filename ) {
-        $title = $this->default_title_from_filename( $filename );
-
-        return array(
-            'title'       => $title,
-            'alt_text'    => $title,
-            'description' => '',
-            '__meta'      => array(
-                'request_id' => '',
-                'usage'      => array(),
-            ),
-        );
-    }
 
     protected function uploaded_file_preview( $uploaded_file ) {
         return array(

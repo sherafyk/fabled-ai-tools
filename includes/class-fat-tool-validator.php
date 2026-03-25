@@ -13,7 +13,7 @@ class FAT_Tool_Validator {
         $workflow = sanitize_key( FAT_Helpers::array_get( $config, 'workflow', '' ) );
         $workflow_config = (array) FAT_Helpers::array_get( $config, 'workflow_config', array() );
 
-        if ( ! in_array( $workflow, array( '', 'featured_image_generator', 'uploaded_image_processor' ), true ) ) {
+        if ( ! in_array( $workflow, array( '', 'featured_image_generator', 'uploaded_image_processor', 'attachment_metadata_assistant' ), true ) ) {
             $workflow = '';
         }
 
@@ -250,7 +250,7 @@ class FAT_Tool_Validator {
         $apply  = (array) FAT_Helpers::array_get( $config, 'apply', array() );
         $workflow = sanitize_key( FAT_Helpers::array_get( $config, 'workflow', '' ) );
 
-        if ( ! in_array( $workflow, array( '', 'featured_image_generator', 'uploaded_image_processor' ), true ) ) {
+        if ( ! in_array( $workflow, array( '', 'featured_image_generator', 'uploaded_image_processor', 'attachment_metadata_assistant' ), true ) ) {
             $errors[] = __( 'Unsupported workflow value for WordPress integration.', 'fabled-ai-tools' );
         }
 
