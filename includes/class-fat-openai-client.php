@@ -78,6 +78,7 @@ class FAT_OpenAI_Client {
         $user_prompt   = trim( (string) FAT_Helpers::array_get( $args, 'prompt', '' ) );
         $image_b64     = trim( (string) FAT_Helpers::array_get( $args, 'image_b64', '' ) );
         $model         = sanitize_text_field( FAT_Helpers::array_get( $args, 'model', 'gpt-5.4-mini' ) );
+        $image_mime_type = sanitize_text_field( FAT_Helpers::array_get( $args, 'image_mime_type', 'image/png' ) );
         $timeout       = max( 5, absint( FAT_Helpers::array_get( $args, 'timeout', $this->settings->get( 'default_timeout', 45 ) ) ) );
 
         if ( '' === $image_b64 ) {
@@ -103,6 +104,7 @@ class FAT_OpenAI_Client {
                 'timeout'           => $timeout,
                 'format_name'       => 'fat_featured_image_metadata',
                 'user_image_b64'    => $image_b64,
+                'user_image_mime_type' => $image_mime_type,
             )
         );
     }
@@ -156,10 +158,11 @@ class FAT_OpenAI_Client {
         );
 
         $user_image_b64 = trim( (string) FAT_Helpers::array_get( $args, 'user_image_b64', '' ) );
+        $user_image_mime_type = sanitize_text_field( FAT_Helpers::array_get( $args, 'user_image_mime_type', 'image/png' ) );
         if ( '' !== $user_image_b64 ) {
             $request_body['input'][1]['content'][] = array(
                 'type'      => 'input_image',
-                'image_url' => 'data:image/png;base64,' . $user_image_b64,
+                'image_url' => 'data:' . $user_image_mime_type . ';base64,' . $user_image_b64,
             );
         }
 

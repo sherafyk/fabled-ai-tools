@@ -11,6 +11,7 @@ class FAT_Activator {
         self::seed_example_tools();
         self::maybe_backfill_seeded_wp_integration();
         self::maybe_seed_missing_featured_image_generator();
+        self::maybe_seed_missing_uploaded_image_processor();
         self::maybe_repair_corrupted_seeded_tools();
         update_option( 'fat_db_version', FAT_DB_VERSION );
     }
@@ -22,6 +23,7 @@ class FAT_Activator {
     public static function maybe_upgrade() {
         // Keep missing built-ins backfilled even when schema version is unchanged.
         self::maybe_seed_missing_featured_image_generator();
+        self::maybe_seed_missing_uploaded_image_processor();
 
         $installed = get_option( 'fat_db_version', '' );
         if ( FAT_DB_VERSION !== $installed ) {
@@ -29,6 +31,7 @@ class FAT_Activator {
             self::add_capabilities();
             self::maybe_backfill_seeded_wp_integration();
             self::maybe_seed_missing_featured_image_generator();
+            self::maybe_seed_missing_uploaded_image_processor();
             self::maybe_repair_corrupted_seeded_tools();
             update_option( 'fat_db_version', FAT_DB_VERSION );
         }
@@ -181,6 +184,10 @@ class FAT_Activator {
 
         $repo->create(
             self::featured_image_generator_blueprint( $common_roles )
+        );
+
+        $repo->create(
+            self::uploaded_image_processor_blueprint( $common_roles )
         );
 
         $repo->create(
@@ -444,6 +451,7 @@ class FAT_Activator {
     protected static function seeded_tool_blueprints() {
         return array(
             'featured-image-generator' => self::featured_image_generator_blueprint( array( 'administrator', 'editor', 'author' ) ),
+            'uploaded-image-processor' => self::uploaded_image_processor_blueprint( array( 'administrator', 'editor', 'author' ) ),
             'seo-excerpt' => array(
                 'name'                 => 'SEO Excerpt',
                 'slug'                 => 'seo-excerpt',
@@ -598,6 +606,86 @@ class FAT_Activator {
         }
 
         $repo->create( self::featured_image_generator_blueprint( array( 'administrator', 'editor', 'author' ) ) );
+    }
+
+
+    protected static function maybe_seed_missing_uploaded_image_processor() {
+        $repo = new FAT_Tools_Repository();
+        $tool = $repo->get_by_slug( 'uploaded-image-processor' );
+        if ( $tool ) {
+            return;
+        }
+
+        $repo->create( self::uploaded_image_processor_blueprint( array( 'administrator', 'editor', 'author' ) ) );
+    }
+
+    protected static function uploaded_image_processor_blueprint( $roles ) {
+        return array(
+            'name'                 => 'Uploaded Image Processor',
+            'slug'                 => 'uploaded-image-processor',
+            'description'          => 'Processes an uploaded image into a 1200x675 WebP asset, stores it in Media Library, and generates attachment metadata.',
+            'is_active'            => 1,
+            'allowed_roles'        => $roles,
+            'allowed_capabilities' => array(),
+            'model'                => '',
+            'system_prompt'        => 'This built-in workflow processes uploaded images server-side and generates attachment metadata. Prompt text fields are optional context only.',
+            'user_prompt_template' => '{{input.prompt}}',
+            'input_schema'         => array(
+                array(
+                    'key'         => 'prompt',
+                    'label'       => 'Optional Context',
+                    'type'        => 'textarea',
+                    'required'    => 0,
+                    'help_text'   => 'Optional context to guide metadata generation.',
+                    'placeholder' => 'Optional context for title/alt/description',
+                    'max_length'  => 1000,
+                ),
+            ),
+            'output_schema'        => array(
+                array(
+                    'key'      => 'title',
+                    'label'    => 'Generated Title',
+                    'type'     => 'text',
+                    'copyable' => 1,
+                ),
+                array(
+                    'key'      => 'alt_text',
+                    'label'    => 'Generated Alt Text',
+                    'type'     => 'text',
+                    'copyable' => 1,
+                ),
+                array(
+                    'key'      => 'description',
+                    'label'    => 'Generated Description',
+                    'type'     => 'long_text',
+                    'copyable' => 1,
+                ),
+            ),
+            'wp_integration'       => array(
+                'workflow' => 'uploaded_image_processor',
+                'workflow_config' => array(
+                    'target_size' => '1200x675',
+                    'target_format' => 'webp',
+                ),
+                'source' => array(
+                    'type'             => '',
+                    'allow_manual'     => 1,
+                    'allow_draft'      => 1,
+                    'allow_publish'    => 1,
+                    'allow_attachment' => 0,
+                ),
+                'apply' => array(
+                    'target'   => 'post',
+                    'mappings' => array(),
+                ),
+            ),
+            'max_input_chars'      => 1500,
+            'max_output_tokens'    => 250,
+            'daily_run_limit'      => 20,
+            'log_inputs'           => 1,
+            'log_outputs'          => 1,
+            'sort_order'           => 16,
+        );
     }
 
     protected static function featured_image_generator_blueprint( $roles ) {

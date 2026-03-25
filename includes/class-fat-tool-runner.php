@@ -12,8 +12,9 @@ class FAT_Tool_Runner {
     protected $client;
     protected $usage_limiter;
     protected $featured_image_generator;
+    protected $uploaded_image_processor;
 
-    public function __construct( FAT_Tools_Repository $tools_repo, FAT_Runs_Repository $runs_repo, FAT_Settings $settings, FAT_Prompt_Engine $prompt_engine, FAT_OpenAI_Client $client, FAT_Usage_Limiter $usage_limiter, FAT_Featured_Image_Generator $featured_image_generator ) {
+    public function __construct( FAT_Tools_Repository $tools_repo, FAT_Runs_Repository $runs_repo, FAT_Settings $settings, FAT_Prompt_Engine $prompt_engine, FAT_OpenAI_Client $client, FAT_Usage_Limiter $usage_limiter, FAT_Featured_Image_Generator $featured_image_generator, FAT_Uploaded_Image_Processor $uploaded_image_processor ) {
         $this->tools_repo     = $tools_repo;
         $this->runs_repo      = $runs_repo;
         $this->settings       = $settings;
@@ -21,6 +22,7 @@ class FAT_Tool_Runner {
         $this->client         = $client;
         $this->usage_limiter  = $usage_limiter;
         $this->featured_image_generator = $featured_image_generator;
+        $this->uploaded_image_processor = $uploaded_image_processor;
     }
 
     public function get_accessible_tools_for_user( $user ) {
@@ -105,11 +107,6 @@ class FAT_Tool_Runner {
             return $resolved_inputs;
         }
 
-        $validated = $this->prompt_engine->sanitize_runtime_inputs( $tool, $resolved_inputs );
-        if ( ! empty( $validated['errors'] ) ) {
-            return new WP_Error( 'fat_invalid_inputs', implode( ' ', $validated['errors'] ), array( 'status' => 400, 'errors' => $validated['errors'] ) );
-        }
-
         $can_run = $this->usage_limiter->assert_can_run( $tool, $user->ID );
         if ( is_wp_error( $can_run ) ) {
             $can_run->add_data( array( 'status' => 429 ) );
@@ -118,6 +115,15 @@ class FAT_Tool_Runner {
 
         if ( 'featured_image_generator' === $workflow ) {
             return $this->execute_featured_image_workflow( $tool, $resolved_inputs, $user );
+        }
+
+        if ( 'uploaded_image_processor' === $workflow ) {
+            return $this->execute_uploaded_image_workflow( $tool, $resolved_inputs, $user );
+        }
+
+        $validated = $this->prompt_engine->sanitize_runtime_inputs( $tool, $resolved_inputs );
+        if ( ! empty( $validated['errors'] ) ) {
+            return new WP_Error( 'fat_invalid_inputs', implode( ' ', $validated['errors'] ), array( 'status' => 400, 'errors' => $validated['errors'] ) );
         }
 
         $inputs        = $validated['inputs'];
@@ -251,8 +257,11 @@ class FAT_Tool_Runner {
             return new WP_Error( 'fat_tool_forbidden', __( 'You are not allowed to apply outputs for this tool.', 'fabled-ai-tools' ), array( 'status' => 403 ) );
         }
 
-        if ( 'featured_image_generator' === $this->tool_workflow_type( $tool ) ) {
+        if ( in_array( $this->tool_workflow_type( $tool ), array( 'featured_image_generator', 'uploaded_image_processor' ), true ) ) {
             $attachment_id = absint( FAT_Helpers::array_get( $outputs, '__fat_featured_attachment_id', 0 ) );
+            if ( $attachment_id <= 0 ) {
+                $attachment_id = absint( FAT_Helpers::array_get( $outputs, 'attachment_id', 0 ) );
+            }
             return $this->featured_image_generator->apply_featured_image( $target_id, $attachment_id );
         }
 
@@ -641,6 +650,86 @@ class FAT_Tool_Runner {
         $value = strtolower( sanitize_text_field( (string) $value ) );
         $value = preg_replace( '/[^a-z0-9_:\-]/', '', $value );
         return is_string( $value ) ? trim( $value ) : '';
+    }
+
+
+    protected function execute_uploaded_image_workflow( $tool, $inputs, $user ) {
+        $request_start = microtime( true );
+        $result        = $this->uploaded_image_processor->execute( $tool, $inputs );
+        $latency_ms    = (int) round( ( microtime( true ) - $request_start ) * 1000 );
+
+        if ( is_wp_error( $result ) ) {
+            $this->log_run(
+                $tool,
+                $user,
+                array(
+                    'status'          => 'error',
+                    'request_preview' => FAT_Helpers::build_preview_from_inputs( $inputs ),
+                    'request_payload' => ! empty( $tool['log_inputs'] ) ? array(
+                        'file' => array(
+                            'name' => FAT_Helpers::array_get( FAT_Helpers::array_get( $inputs, '__fat_uploaded_image_file', array() ), 'name', '' ),
+                            'type' => FAT_Helpers::array_get( FAT_Helpers::array_get( $inputs, '__fat_uploaded_image_file', array() ), 'type', '' ),
+                            'size' => FAT_Helpers::array_get( FAT_Helpers::array_get( $inputs, '__fat_uploaded_image_file', array() ), 'size', 0 ),
+                            'error' => FAT_Helpers::array_get( FAT_Helpers::array_get( $inputs, '__fat_uploaded_image_file', array() ), 'error', null ),
+                        ),
+                        'workflow_config' => FAT_Helpers::array_get( FAT_Helpers::array_get( $tool, 'wp_integration', array() ), 'workflow_config', array() ),
+                    ) : null,
+                    'response_payload'=> ! empty( $tool['log_outputs'] ) ? $result->get_error_data() : null,
+                    'error_message'   => $result->get_error_message(),
+                    'latency_ms'      => $latency_ms,
+                )
+            );
+
+            return $result;
+        }
+
+        $outputs = array(
+            'title'       => (string) FAT_Helpers::array_get( $result, 'title', '' ),
+            'alt_text'    => (string) FAT_Helpers::array_get( $result, 'alt_text', '' ),
+            'description' => (string) FAT_Helpers::array_get( $result, 'description', '' ),
+            'attachment_id' => (string) FAT_Helpers::array_get( $result, 'attachment_id', 0 ),
+            '__fat_featured_attachment_id' => (string) FAT_Helpers::array_get( $result, 'attachment_id', 0 ),
+        );
+
+        $this->log_run(
+            $tool,
+            $user,
+            array(
+                'status'            => 'success',
+                'request_preview'   => FAT_Helpers::build_preview_from_inputs( $inputs ),
+                'response_preview'  => FAT_Helpers::build_preview_from_outputs( $outputs ),
+                'request_payload'   => ! empty( $tool['log_inputs'] ) ? array(
+                    'file' => array(
+                        'name' => FAT_Helpers::array_get( FAT_Helpers::array_get( $inputs, '__fat_uploaded_image_file', array() ), 'name', '' ),
+                        'type' => FAT_Helpers::array_get( FAT_Helpers::array_get( $inputs, '__fat_uploaded_image_file', array() ), 'type', '' ),
+                        'size' => FAT_Helpers::array_get( FAT_Helpers::array_get( $inputs, '__fat_uploaded_image_file', array() ), 'size', 0 ),
+                    ),
+                    'workflow_config' => FAT_Helpers::array_get( FAT_Helpers::array_get( $tool, 'wp_integration', array() ), 'workflow_config', array() ),
+                ) : null,
+                'response_payload'  => ! empty( $tool['log_outputs'] ) ? $result : null,
+                'error_message'     => '',
+                'prompt_tokens'     => FAT_Helpers::array_get( FAT_Helpers::array_get( $result, 'usage', array() ), 'input_tokens', null ),
+                'completion_tokens' => FAT_Helpers::array_get( FAT_Helpers::array_get( $result, 'usage', array() ), 'output_tokens', null ),
+                'total_tokens'      => FAT_Helpers::array_get( FAT_Helpers::array_get( $result, 'usage', array() ), 'total_tokens', null ),
+                'latency_ms'        => $latency_ms,
+                'openai_request_id' => (string) FAT_Helpers::array_get( FAT_Helpers::array_get( $result, 'request_ids', array() ), 'metadata', '' ),
+            )
+        );
+
+        return array(
+            'tool'    => array(
+                'id'   => $tool['id'],
+                'name' => $tool['name'],
+                'slug' => $tool['slug'],
+            ),
+            'outputs' => $outputs,
+            'meta'    => array(
+                'workflow'   => 'uploaded_image_processor',
+                'latency_ms' => $latency_ms,
+                'usage'      => FAT_Helpers::array_get( $result, 'usage', array() ),
+                'image'      => $result,
+            ),
+        );
     }
 
     protected function execute_featured_image_workflow( $tool, $inputs, $user ) {
