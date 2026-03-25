@@ -153,6 +153,9 @@ class FAT_Admin {
                     'applyNoFields' => __( 'Select at least one field to apply.', 'fabled-ai-tools' ),
                     'applyTargetRequired' => __( 'Please choose a target before applying.', 'fabled-ai-tools' ),
                     'applyUnavailable' => __( 'No apply mappings are available for the generated outputs.', 'fabled-ai-tools' ),
+                    'imagePromptRequired' => __( 'Please enter an image prompt.', 'fabled-ai-tools' ),
+                    'applyFeaturedImage' => __( 'Apply as Featured Image', 'fabled-ai-tools' ),
+                    'applyFeaturedSuccess' => __( 'Featured image was applied successfully.', 'fabled-ai-tools' ),
                     'addInputField'  => __( 'Add Input Field', 'fabled-ai-tools' ),
                     'addOutputField' => __( 'Add Output Field', 'fabled-ai-tools' ),
                 ),
@@ -613,6 +616,12 @@ class FAT_Admin {
 
                 <div class="fat-card">
                     <h2><?php esc_html_e( 'WordPress Apply Integration', 'fabled-ai-tools' ); ?></h2>
+                    <?php if ( ! empty( $wp_integration_form['workflow'] ) ) : ?>
+                        <input type="hidden" name="wp_integration_workflow" value="<?php echo esc_attr( $wp_integration_form['workflow'] ); ?>" />
+                        <?php foreach ( (array) FAT_Helpers::array_get( $wp_integration_form, 'workflow_config', array() ) as $workflow_key => $workflow_value ) : ?>
+                            <input type="hidden" name="wp_integration_workflow_config[<?php echo esc_attr( $workflow_key ); ?>]" value="<?php echo esc_attr( $workflow_value ); ?>" />
+                        <?php endforeach; ?>
+                    <?php endif; ?>
                     <table class="form-table" role="presentation">
                         <tr>
                             <th scope="row"><?php esc_html_e( 'Enable Integration', 'fabled-ai-tools' ); ?></th>
@@ -943,6 +952,8 @@ class FAT_Admin {
         $mapping_rows = isset( $_POST['wp_integration_mappings'] ) ? wp_unslash( $_POST['wp_integration_mappings'] ) : array();
 
         $wp_integration_raw = array();
+        $workflow           = sanitize_key( FAT_Helpers::array_get( $_POST, 'wp_integration_workflow', '' ) );
+        $workflow_config    = FAT_Helpers::array_get( $_POST, 'wp_integration_workflow_config', array() );
         if ( ! empty( $_POST['wp_integration_enabled'] ) ) {
             $target = sanitize_key( FAT_Helpers::array_get( $_POST, 'wp_integration_apply_target', '' ) );
             if ( 'media' === $target ) {
@@ -950,6 +961,8 @@ class FAT_Admin {
             }
 
             $wp_integration_raw = array(
+                'workflow' => $workflow,
+                'workflow_config' => is_array( $workflow_config ) ? wp_unslash( $workflow_config ) : array(),
                 'source' => array(
                     'type'             => '',
                     'allow_manual'     => 1,
@@ -961,6 +974,11 @@ class FAT_Admin {
                     'target'   => $target,
                     'mappings' => is_array( $mapping_rows ) ? $mapping_rows : array(),
                 ),
+            );
+        } elseif ( '' !== $workflow ) {
+            $wp_integration_raw = array(
+                'workflow' => $workflow,
+                'workflow_config' => is_array( $workflow_config ) ? wp_unslash( $workflow_config ) : array(),
             );
         }
 
@@ -1136,6 +1154,8 @@ class FAT_Admin {
 
         return array(
             'enabled'      => ! empty( $config ),
+            'workflow'     => sanitize_key( FAT_Helpers::array_get( $config, 'workflow', '' ) ),
+            'workflow_config' => (array) FAT_Helpers::array_get( $config, 'workflow_config', array() ),
             'apply_target' => $apply_target,
             'mappings'     => (array) FAT_Helpers::array_get( $apply, 'mappings', array() ),
         );

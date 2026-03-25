@@ -66,6 +66,8 @@ class FAT_Prompt_Engine {
             'input_schema'    => array_values( (array) FAT_Helpers::array_get( $tool, 'input_schema', array() ) ),
             'output_schema'   => array_values( (array) FAT_Helpers::array_get( $tool, 'output_schema', array() ) ),
             'wp_integration'  => array(
+                'workflow' => sanitize_key( FAT_Helpers::array_get( $wp_integration, 'workflow', '' ) ),
+                'workflow_config' => (array) FAT_Helpers::array_get( $wp_integration, 'workflow_config', array() ),
                 'source' => array(
                     'type'             => sanitize_key( FAT_Helpers::array_get( $source, 'type', '' ) ),
                     'allow_manual'     => ! empty( $source['allow_manual'] ),
