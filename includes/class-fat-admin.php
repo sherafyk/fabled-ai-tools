@@ -137,6 +137,7 @@ class FAT_Admin {
                     'selectPublished'=> __( 'Select Published Post', 'fabled-ai-tools' ),
                     'loadingPosts'   => __( 'Loading posts…', 'fabled-ai-tools' ),
                     'choosePost'     => __( 'Choose a post', 'fabled-ai-tools' ),
+                    'searchPosts'    => __( 'Search posts by title…', 'fabled-ai-tools' ),
                     'noPostsFound'   => __( 'No posts found for this status.', 'fabled-ai-tools' ),
                     'loadPostsError' => __( 'Unable to load posts for this source.', 'fabled-ai-tools' ),
                     'postSelectionRequired' => __( 'Please select a post for the chosen content source.', 'fabled-ai-tools' ),
@@ -145,6 +146,7 @@ class FAT_Admin {
                     'selectMedia'   => __( 'Select Media Attachment', 'fabled-ai-tools' ),
                     'loadingMedia'  => __( 'Loading media…', 'fabled-ai-tools' ),
                     'chooseMedia'   => __( 'Choose an attachment', 'fabled-ai-tools' ),
+                    'searchMedia'   => __( 'Search media by title or filename…', 'fabled-ai-tools' ),
                     'noMediaFound'  => __( 'No attachments found.', 'fabled-ai-tools' ),
                     'loadMediaError'=> __( 'Unable to load attachments.', 'fabled-ai-tools' ),
                     'mediaSelectionRequired' => __( 'Please select an attachment.', 'fabled-ai-tools' ),
@@ -165,7 +167,11 @@ class FAT_Admin {
                     'applySelected' => __( 'Apply Selected Fields', 'fabled-ai-tools' ),
                     'applyPanelTitle' => __( 'Apply to WordPress', 'fabled-ai-tools' ),
                     'applyTarget'   => __( 'Target', 'fabled-ai-tools' ),
+                    'applyTargetSelected' => __( 'Selected target', 'fabled-ai-tools' ),
+                    'applyTargetNone' => __( 'No target selected.', 'fabled-ai-tools' ),
                     'applyFields'   => __( 'Fields to apply', 'fabled-ai-tools' ),
+                    'searchButton'  => __( 'Search', 'fabled-ai-tools' ),
+                    'loadMore'      => __( 'Load more', 'fabled-ai-tools' ),
                     'applySuccess'  => __( 'Selected fields were applied successfully.', 'fabled-ai-tools' ),
                     'applyError'    => __( 'Unable to apply selected outputs.', 'fabled-ai-tools' ),
                     'applyNoFields' => __( 'Select at least one field to apply.', 'fabled-ai-tools' ),
@@ -978,11 +984,24 @@ class FAT_Admin {
             );
         }
 
-        $posts = $this->entity_query_service->get_editable_posts_for_runner( $status, wp_get_current_user(), 40 );
+        $search   = isset( $_GET['q'] ) ? sanitize_text_field( wp_unslash( $_GET['q'] ) ) : '';
+        $page     = isset( $_GET['page'] ) ? max( 1, absint( $_GET['page'] ) ) : 1;
+        $per_page = isset( $_GET['per_page'] ) ? min( 50, max( 1, absint( $_GET['per_page'] ) ) ) : 20;
+        $result   = $this->entity_query_service->search_editable_posts_for_runner(
+            wp_get_current_user(),
+            array(
+                'status'   => $status,
+                'search'   => $search,
+                'page'     => $page,
+                'per_page' => $per_page,
+            )
+        );
 
         wp_send_json_success(
             array(
-                'posts' => $posts,
+                'posts'     => FAT_Helpers::array_get( $result, 'items', array() ),
+                'has_more'  => (bool) FAT_Helpers::array_get( $result, 'has_more', false ),
+                'next_page' => FAT_Helpers::array_get( $result, 'next_page', null ),
             )
         );
     }
@@ -999,11 +1018,23 @@ class FAT_Admin {
 
         check_ajax_referer( 'fat_runner_posts', 'nonce' );
 
-        $attachments = $this->entity_query_service->get_editable_attachments_for_runner( wp_get_current_user(), 40 );
+        $search   = isset( $_GET['q'] ) ? sanitize_text_field( wp_unslash( $_GET['q'] ) ) : '';
+        $page     = isset( $_GET['page'] ) ? max( 1, absint( $_GET['page'] ) ) : 1;
+        $per_page = isset( $_GET['per_page'] ) ? min( 50, max( 1, absint( $_GET['per_page'] ) ) ) : 20;
+        $result   = $this->entity_query_service->search_editable_attachments_for_runner(
+            wp_get_current_user(),
+            array(
+                'search'   => $search,
+                'page'     => $page,
+                'per_page' => $per_page,
+            )
+        );
 
         wp_send_json_success(
             array(
-                'attachments' => $attachments,
+                'attachments' => FAT_Helpers::array_get( $result, 'items', array() ),
+                'has_more'    => (bool) FAT_Helpers::array_get( $result, 'has_more', false ),
+                'next_page'   => FAT_Helpers::array_get( $result, 'next_page', null ),
             )
         );
     }

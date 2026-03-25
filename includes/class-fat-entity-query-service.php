@@ -7,43 +7,149 @@ if ( ! defined( 'ABSPATH' ) ) {
 class FAT_Entity_Query_Service {
     const DEFAULT_RESULT_LIMIT = 40;
     const MAX_QUERY_PAGES      = 5;
+    const DEFAULT_PAGE_SIZE    = 20;
+    const MAX_PAGE_SIZE        = 50;
 
     public function get_editable_posts_for_runner( $status, $user, $limit = self::DEFAULT_RESULT_LIMIT ) {
-        $status = sanitize_key( $status );
-        $user   = $this->normalize_user( $user );
-        $limit  = max( 1, absint( $limit ) );
+        $result = $this->search_editable_posts_for_runner(
+            $user,
+            array(
+                'status'   => $status,
+                'per_page' => $limit,
+                'page'     => 1,
+            )
+        );
+
+        return (array) FAT_Helpers::array_get( $result, 'items', array() );
+    }
+
+    public function get_editable_attachments_for_runner( $user, $limit = self::DEFAULT_RESULT_LIMIT ) {
+        $result = $this->search_editable_attachments_for_runner(
+            $user,
+            array(
+                'per_page' => $limit,
+                'page'     => 1,
+            )
+        );
+
+        return (array) FAT_Helpers::array_get( $result, 'items', array() );
+    }
+
+    public function search_editable_posts_for_runner( $user, $args = array() ) {
+        $user  = $this->normalize_user( $user );
+        $status = sanitize_key( FAT_Helpers::array_get( $args, 'status', '' ) );
+        $search = sanitize_text_field( FAT_Helpers::array_get( $args, 'search', '' ) );
+        $page   = max( 1, absint( FAT_Helpers::array_get( $args, 'page', 1 ) ) );
+        $per_page = min( self::MAX_PAGE_SIZE, max( 1, absint( FAT_Helpers::array_get( $args, 'per_page', self::DEFAULT_PAGE_SIZE ) ) ) );
 
         if ( ! $user || ! $user->exists() ) {
-            return array();
+            return array(
+                'items'     => array(),
+                'has_more'  => false,
+                'next_page' => null,
+            );
         }
 
         if ( ! in_array( $status, array( 'draft', 'publish' ), true ) ) {
-            return array();
+            $status = 'publish';
         }
 
-        $results   = array();
-        $page      = 1;
-        $page_size = min( 100, max( $limit, 40 ) );
+        $raw_posts = $this->query_ids_with_capability_filter(
+            array(
+                'post_type'              => 'post',
+                'post_status'            => $status,
+                'posts_per_page'         => $per_page,
+                'paged'                  => $page,
+                'orderby'                => 'modified',
+                'order'                  => 'DESC',
+                'ignore_sticky_posts'    => true,
+                'update_post_meta_cache' => false,
+                'update_post_term_cache' => false,
+                's'                      => $search,
+            ),
+            $user
+        );
 
-        while ( count( $results ) < $limit && $page <= self::MAX_QUERY_PAGES ) {
-            $query = new WP_Query(
-                array(
-                    'post_type'              => 'post',
-                    'post_status'            => $status,
-                    'posts_per_page'         => $page_size,
-                    'paged'                  => $page,
-                    'orderby'                => 'modified',
-                    'order'                  => 'DESC',
-                    'ignore_sticky_posts'    => true,
-                    'no_found_rows'          => true,
-                    'update_post_meta_cache' => false,
-                    'update_post_term_cache' => false,
-                    'fields'                 => 'ids',
-                )
+        $items = array();
+        foreach ( $raw_posts['ids'] as $post_id ) {
+            $items[] = array(
+                'id'    => (int) $post_id,
+                'title' => html_entity_decode( get_the_title( $post_id ), ENT_QUOTES, get_bloginfo( 'charset' ) ),
             );
+        }
 
+        return array(
+            'items'     => $items,
+            'has_more'  => ! empty( $raw_posts['has_more'] ),
+            'next_page' => ! empty( $raw_posts['has_more'] ) ? ( $page + 1 ) : null,
+        );
+    }
+
+    public function search_editable_attachments_for_runner( $user, $args = array() ) {
+        $user    = $this->normalize_user( $user );
+        $search  = sanitize_text_field( FAT_Helpers::array_get( $args, 'search', '' ) );
+        $page    = max( 1, absint( FAT_Helpers::array_get( $args, 'page', 1 ) ) );
+        $per_page = min( self::MAX_PAGE_SIZE, max( 1, absint( FAT_Helpers::array_get( $args, 'per_page', self::DEFAULT_PAGE_SIZE ) ) ) );
+
+        if ( ! $user || ! $user->exists() ) {
+            return array(
+                'items'     => array(),
+                'has_more'  => false,
+                'next_page' => null,
+            );
+        }
+
+        $raw_attachments = $this->query_ids_with_capability_filter(
+            array(
+                'post_type'              => 'attachment',
+                'post_status'            => 'inherit',
+                'post_mime_type'         => 'image',
+                'posts_per_page'         => $per_page,
+                'paged'                  => $page,
+                'orderby'                => 'modified',
+                'order'                  => 'DESC',
+                'update_post_meta_cache' => false,
+                'update_post_term_cache' => false,
+                's'                      => $search,
+            ),
+            $user
+        );
+
+        $items = array();
+        foreach ( $raw_attachments['ids'] as $attachment_id ) {
+            $attached_file = get_attached_file( $attachment_id );
+            $items[]       = array(
+                'id'       => (int) $attachment_id,
+                'title'    => html_entity_decode( get_the_title( $attachment_id ), ENT_QUOTES, get_bloginfo( 'charset' ) ),
+                'filename' => $attached_file ? wp_basename( $attached_file ) : '',
+            );
+        }
+
+        return array(
+            'items'     => $items,
+            'has_more'  => ! empty( $raw_attachments['has_more'] ),
+            'next_page' => ! empty( $raw_attachments['has_more'] ) ? ( $page + 1 ) : null,
+        );
+    }
+
+    protected function query_ids_with_capability_filter( $query_args, $user ) {
+        $page     = max( 1, absint( FAT_Helpers::array_get( $query_args, 'paged', 1 ) ) );
+        $per_page = max( 1, absint( FAT_Helpers::array_get( $query_args, 'posts_per_page', self::DEFAULT_PAGE_SIZE ) ) );
+        $results  = array();
+        $cycles   = 0;
+
+        while ( count( $results ) < $per_page && $cycles < self::MAX_QUERY_PAGES ) {
+            $query_args['paged']          = $page;
+            $query_args['posts_per_page'] = $per_page;
+            $query_args['fields']         = 'ids';
+            $query_args['no_found_rows']  = true;
+
+            $query = new WP_Query( $query_args );
             if ( empty( $query->posts ) ) {
-                break;
+                return array(
+                    'ids'      => $results,
+                    'has_more' => false,
+                );
             }
 
             foreach ( $query->posts as $post_id ) {
@@ -52,85 +158,27 @@ class FAT_Entity_Query_Service {
                     continue;
                 }
 
-                $results[] = array(
-                    'id'    => $post_id,
-                    'title' => html_entity_decode( get_the_title( $post_id ), ENT_QUOTES, get_bloginfo( 'charset' ) ),
-                );
-
-                if ( count( $results ) >= $limit ) {
+                $results[] = $post_id;
+                if ( count( $results ) >= $per_page ) {
                     break;
                 }
             }
 
-            if ( count( $query->posts ) < $page_size ) {
-                break;
-            }
-
-            ++$page;
-        }
-
-        return $results;
-    }
-
-    public function get_editable_attachments_for_runner( $user, $limit = self::DEFAULT_RESULT_LIMIT ) {
-        $user  = $this->normalize_user( $user );
-        $limit = max( 1, absint( $limit ) );
-
-        if ( ! $user || ! $user->exists() ) {
-            return array();
-        }
-
-        $results   = array();
-        $page      = 1;
-        $page_size = min( 100, max( $limit, 40 ) );
-
-        while ( count( $results ) < $limit && $page <= self::MAX_QUERY_PAGES ) {
-            $query = new WP_Query(
-                array(
-                    'post_type'              => 'attachment',
-                    'post_status'            => 'inherit',
-                    'post_mime_type'         => 'image',
-                    'posts_per_page'         => $page_size,
-                    'paged'                  => $page,
-                    'orderby'                => 'modified',
-                    'order'                  => 'DESC',
-                    'no_found_rows'          => true,
-                    'update_post_meta_cache' => false,
-                    'update_post_term_cache' => false,
-                    'fields'                 => 'ids',
-                )
-            );
-
-            if ( empty( $query->posts ) ) {
-                break;
-            }
-
-            foreach ( $query->posts as $attachment_id ) {
-                $attachment_id = (int) $attachment_id;
-                if ( ! user_can( $user, 'edit_post', $attachment_id ) ) {
-                    continue;
-                }
-
-                $attached_file = get_attached_file( $attachment_id );
-                $results[]     = array(
-                    'id'       => $attachment_id,
-                    'title'    => html_entity_decode( get_the_title( $attachment_id ), ENT_QUOTES, get_bloginfo( 'charset' ) ),
-                    'filename' => $attached_file ? wp_basename( $attached_file ) : '',
+            if ( count( $query->posts ) < $per_page ) {
+                return array(
+                    'ids'      => $results,
+                    'has_more' => false,
                 );
-
-                if ( count( $results ) >= $limit ) {
-                    break;
-                }
-            }
-
-            if ( count( $query->posts ) < $page_size ) {
-                break;
             }
 
             ++$page;
+            ++$cycles;
         }
 
-        return $results;
+        return array(
+            'ids'      => array_slice( $results, 0, $per_page ),
+            'has_more' => true,
+        );
     }
 
     protected function normalize_user( $user ) {
