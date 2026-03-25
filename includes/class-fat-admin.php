@@ -38,6 +38,9 @@ class FAT_Admin {
         add_action( 'admin_post_fat_import_tool', array( $this, 'handle_import_tool' ) );
         add_action( 'wp_ajax_fat_runner_posts', array( $this, 'handle_runner_posts_lookup' ) );
         add_action( 'wp_ajax_fat_runner_attachments', array( $this, 'handle_runner_attachments_lookup' ) );
+        add_filter( 'post_row_actions', array( $this, 'add_post_row_launch_link' ), 10, 2 );
+        add_filter( 'page_row_actions', array( $this, 'add_post_row_launch_link' ), 10, 2 );
+        add_filter( 'media_row_actions', array( $this, 'add_media_row_launch_link' ), 10, 2 );
     }
 
     public function register_menus() {
@@ -76,6 +79,15 @@ class FAT_Admin {
             'fat_manage_tools',
             'fat-tool-edit',
             array( $this, 'render_tool_edit_page' )
+        );
+
+        add_submenu_page(
+            'fabled-ai-tools',
+            __( 'Needs Attention', 'fabled-ai-tools' ),
+            __( 'Needs Attention', 'fabled-ai-tools' ),
+            'fat_run_ai_tools',
+            'fat-needs-attention',
+            array( $this, 'render_needs_attention_page' )
         );
 
         add_submenu_page(
@@ -123,6 +135,7 @@ class FAT_Admin {
                 'ajaxUrl' => esc_url_raw( admin_url( 'admin-ajax.php' ) ),
                 'nonce'   => wp_create_nonce( 'wp_rest' ),
                 'postsNonce' => wp_create_nonce( 'fat_runner_posts' ),
+                'launchContext' => $this->runner_launch_context_from_request(),
                 'tools'   => $public_tools,
                 'strings' => array(
                     'runTool'        => __( 'Run Tool', 'fabled-ai-tools' ),
@@ -490,6 +503,8 @@ class FAT_Admin {
                                 <td>
                                     <a href="<?php echo esc_url( admin_url( 'admin.php?page=fat-tool-edit&id=' . (int) $tool['id'] ) ); ?>"><?php esc_html_e( 'Edit', 'fabled-ai-tools' ); ?></a>
                                     |
+                                    <a href="<?php echo esc_url( $this->runner_launch_url( array( 'fat_tool' => $tool['slug'] ) ) ); ?>"><?php esc_html_e( 'Run', 'fabled-ai-tools' ); ?></a>
+                                    |
                                     <a href="<?php echo esc_url( $this->tool_action_url( 'export', $tool['id'] ) ); ?>"><?php esc_html_e( 'Export', 'fabled-ai-tools' ); ?></a>
                                     |
                                     <a href="<?php echo esc_url( $this->tool_action_url( 'duplicate', $tool['id'] ) ); ?>"><?php esc_html_e( 'Duplicate', 'fabled-ai-tools' ); ?></a>
@@ -776,6 +791,83 @@ class FAT_Admin {
             <script type="text/template" id="fat-input-row-template"><?php ob_start(); $this->render_input_schema_row( '__INDEX__', $this->default_input_row() ); echo trim( ob_get_clean() ); ?></script>
             <script type="text/template" id="fat-output-row-template"><?php ob_start(); $this->render_output_schema_row( '__INDEX__', $this->default_output_row() ); echo trim( ob_get_clean() ); ?></script>
             <script type="text/template" id="fat-wp-mapping-row-template"><?php ob_start(); $this->render_wp_mapping_row( '__INDEX__', $this->default_wp_mapping_row(), $tool['output_schema'] ); echo trim( ob_get_clean() ); ?></script>
+        </div>
+        <?php
+    }
+
+    public function render_needs_attention_page() {
+        if ( ! $this->current_user_can_run_tools() ) {
+            wp_die( esc_html__( 'You are not allowed to view this page.', 'fabled-ai-tools' ) );
+        }
+
+        $excerpt_items        = $this->find_posts_missing_excerpt( 12 );
+        $featured_image_items = $this->find_posts_missing_featured_image( 12 );
+        $attachment_items     = $this->find_attachments_missing_alt_text( 12 );
+        $recent_errors_24h    = $this->runs_repo->count_runs_since( 'error', gmdate( 'Y-m-d H:i:s', time() - DAY_IN_SECONDS ) );
+        $recent_errors_7d     = $this->runs_repo->count_runs_since( 'error', gmdate( 'Y-m-d H:i:s', time() - ( DAY_IN_SECONDS * 7 ) ) );
+        $latest_failures      = $this->runs_repo->get_recent_failures( 6 );
+
+        $tool_map = array();
+        foreach ( $this->tools_repo->get_all() as $tool ) {
+            $tool_map[ (int) $tool['id'] ] = $tool;
+        }
+        ?>
+        <div class="wrap fat-wrap">
+            <h1><?php esc_html_e( 'Needs Attention', 'fabled-ai-tools' ); ?></h1>
+            <p><?php esc_html_e( 'Use these lightweight queues to spot common editorial gaps and launch directly into the right workflow.', 'fabled-ai-tools' ); ?></p>
+
+            <div class="fat-grid-2">
+                <div class="fat-card">
+                    <h2><?php esc_html_e( 'Recent Health', 'fabled-ai-tools' ); ?></h2>
+                    <ul class="fat-health-list">
+                        <li><strong><?php echo esc_html( number_format_i18n( $recent_errors_24h ) ); ?></strong> <?php esc_html_e( 'errors in the last 24 hours', 'fabled-ai-tools' ); ?></li>
+                        <li><strong><?php echo esc_html( number_format_i18n( $recent_errors_7d ) ); ?></strong> <?php esc_html_e( 'errors in the last 7 days', 'fabled-ai-tools' ); ?></li>
+                    </ul>
+                    <p><a href="<?php echo esc_url( admin_url( 'admin.php?page=fat-logs&status=error' ) ); ?>" class="button button-secondary"><?php esc_html_e( 'View Error Logs', 'fabled-ai-tools' ); ?></a></p>
+                </div>
+
+                <div class="fat-card">
+                    <h2><?php esc_html_e( 'Latest Failed Runs', 'fabled-ai-tools' ); ?></h2>
+                    <?php if ( empty( $latest_failures ) ) : ?>
+                        <p class="fat-muted"><?php esc_html_e( 'No recent failures found.', 'fabled-ai-tools' ); ?></p>
+                    <?php else : ?>
+                        <ul class="fat-failure-list">
+                            <?php foreach ( $latest_failures as $run ) : ?>
+                                <?php $tool = FAT_Helpers::array_get( $tool_map, (int) $run['tool_id'], array() ); ?>
+                                <li>
+                                    <a href="<?php echo esc_url( add_query_arg( array( 'page' => 'fat-logs', 'run_id' => (int) $run['id'], 'status' => 'error' ), admin_url( 'admin.php' ) ) ); ?>">
+                                        <?php
+                                        echo esc_html(
+                                            sprintf(
+                                                '#%1$d — %2$s',
+                                                (int) $run['id'],
+                                                FAT_Helpers::array_get( $tool, 'name', '#' . (int) $run['tool_id'] )
+                                            )
+                                        );
+                                        ?>
+                                    </a>
+                                    <span class="fat-muted">· <?php echo esc_html( $run['created_at'] ); ?></span>
+                                </li>
+                            <?php endforeach; ?>
+                        </ul>
+                    <?php endif; ?>
+                </div>
+            </div>
+
+            <div class="fat-card fat-table-card">
+                <h2><?php esc_html_e( 'Posts Missing Excerpts', 'fabled-ai-tools' ); ?></h2>
+                <?php $this->render_gap_posts_table( $excerpt_items, 'seo-excerpt', __( 'Generate Excerpt', 'fabled-ai-tools' ) ); ?>
+            </div>
+
+            <div class="fat-card fat-table-card">
+                <h2><?php esc_html_e( 'Posts Missing Featured Images', 'fabled-ai-tools' ); ?></h2>
+                <?php $this->render_gap_posts_table( $featured_image_items, 'featured-image-generator', __( 'Generate Featured Image', 'fabled-ai-tools' ) ); ?>
+            </div>
+
+            <div class="fat-card fat-table-card">
+                <h2><?php esc_html_e( 'Image Attachments Missing Alt Text', 'fabled-ai-tools' ); ?></h2>
+                <?php $this->render_gap_attachments_table( $attachment_items ); ?>
+            </div>
         </div>
         <?php
     }
@@ -1491,12 +1583,322 @@ class FAT_Admin {
         );
     }
 
+    public function add_post_row_launch_link( $actions, $post ) {
+        if ( ! $this->current_user_can_run_tools() || ! ( $post instanceof WP_Post ) ) {
+            return $actions;
+        }
+
+        if ( ! user_can( get_current_user_id(), 'edit_post', $post->ID ) ) {
+            return $actions;
+        }
+
+        $tool_slug = 'seo-excerpt';
+        if ( post_type_supports( $post->post_type, 'thumbnail' ) ) {
+            $tool_slug = 'featured-image-generator';
+        }
+
+        $actions['fat_open_runner'] = sprintf(
+            '<a href="%1$s">%2$s</a>',
+            esc_url(
+                $this->runner_launch_url(
+                    array(
+                        'fat_tool'        => $tool_slug,
+                        'fat_source_post' => (int) $post->ID,
+                        'fat_source_status' => 'publish' === $post->post_status ? 'publish' : 'draft',
+                        'fat_target_post' => (int) $post->ID,
+                    )
+                )
+            ),
+            esc_html__( 'Open in Fabled AI Tools', 'fabled-ai-tools' )
+        );
+
+        return $actions;
+    }
+
+    public function add_media_row_launch_link( $actions, $post ) {
+        if ( ! $this->current_user_can_run_tools() || ! ( $post instanceof WP_Post ) ) {
+            return $actions;
+        }
+
+        if ( 'attachment' !== $post->post_type || ! user_can( get_current_user_id(), 'edit_post', $post->ID ) ) {
+            return $actions;
+        }
+
+        $actions['fat_open_runner'] = sprintf(
+            '<a href="%1$s">%2$s</a>',
+            esc_url(
+                $this->runner_launch_url(
+                    array(
+                        'fat_tool'          => 'attachment-metadata-assistant',
+                        'fat_attachment_id' => (int) $post->ID,
+                    )
+                )
+            ),
+            esc_html__( 'Open in Fabled AI Tools', 'fabled-ai-tools' )
+        );
+
+        return $actions;
+    }
+
+    protected function render_gap_posts_table( $posts, $tool_slug, $launch_label ) {
+        ?>
+        <table class="widefat striped fat-table">
+            <thead>
+                <tr>
+                    <th><?php esc_html_e( 'Title', 'fabled-ai-tools' ); ?></th>
+                    <th><?php esc_html_e( 'Type', 'fabled-ai-tools' ); ?></th>
+                    <th><?php esc_html_e( 'Status', 'fabled-ai-tools' ); ?></th>
+                    <th><?php esc_html_e( 'Updated', 'fabled-ai-tools' ); ?></th>
+                    <th><?php esc_html_e( 'Launch', 'fabled-ai-tools' ); ?></th>
+                </tr>
+            </thead>
+            <tbody>
+                <?php if ( empty( $posts ) ) : ?>
+                    <tr><td colspan="5"><?php esc_html_e( 'No items found.', 'fabled-ai-tools' ); ?></td></tr>
+                <?php else : ?>
+                    <?php foreach ( $posts as $post ) : ?>
+                        <tr>
+                            <td>
+                                <a href="<?php echo esc_url( get_edit_post_link( $post->ID ) ); ?>">
+                                    <?php echo esc_html( get_the_title( $post->ID ) ? get_the_title( $post->ID ) : '#' . (int) $post->ID ); ?>
+                                </a>
+                            </td>
+                            <td>
+                                <?php
+                                $post_type_obj = get_post_type_object( $post->post_type );
+                                echo esc_html( $post_type_obj ? $post_type_obj->labels->singular_name : $post->post_type );
+                                ?>
+                            </td>
+                            <td><?php echo esc_html( $post->post_status ); ?></td>
+                            <td><?php echo esc_html( get_the_modified_date( 'Y-m-d H:i', $post->ID ) ); ?></td>
+                            <td>
+                                <a class="button button-secondary" href="<?php echo esc_url( $this->runner_launch_url( array( 'fat_tool' => $tool_slug, 'fat_source_post' => (int) $post->ID, 'fat_source_status' => 'publish' === $post->post_status ? 'publish' : 'draft', 'fat_target_post' => (int) $post->ID ) ) ); ?>">
+                                    <?php echo esc_html( $launch_label ); ?>
+                                </a>
+                            </td>
+                        </tr>
+                    <?php endforeach; ?>
+                <?php endif; ?>
+            </tbody>
+        </table>
+        <?php
+    }
+
+    protected function render_gap_attachments_table( $attachments ) {
+        ?>
+        <table class="widefat striped fat-table">
+            <thead>
+                <tr>
+                    <th><?php esc_html_e( 'Attachment', 'fabled-ai-tools' ); ?></th>
+                    <th><?php esc_html_e( 'Filename', 'fabled-ai-tools' ); ?></th>
+                    <th><?php esc_html_e( 'Updated', 'fabled-ai-tools' ); ?></th>
+                    <th><?php esc_html_e( 'Launch', 'fabled-ai-tools' ); ?></th>
+                </tr>
+            </thead>
+            <tbody>
+                <?php if ( empty( $attachments ) ) : ?>
+                    <tr><td colspan="4"><?php esc_html_e( 'No items found.', 'fabled-ai-tools' ); ?></td></tr>
+                <?php else : ?>
+                    <?php foreach ( $attachments as $attachment ) : ?>
+                        <tr>
+                            <td>
+                                <a href="<?php echo esc_url( get_edit_post_link( $attachment->ID ) ); ?>">
+                                    <?php echo esc_html( get_the_title( $attachment->ID ) ? get_the_title( $attachment->ID ) : '#' . (int) $attachment->ID ); ?>
+                                </a>
+                            </td>
+                            <td><?php echo esc_html( wp_basename( (string) get_attached_file( $attachment->ID ) ) ); ?></td>
+                            <td><?php echo esc_html( get_the_modified_date( 'Y-m-d H:i', $attachment->ID ) ); ?></td>
+                            <td>
+                                <a class="button button-secondary" href="<?php echo esc_url( $this->runner_launch_url( array( 'fat_tool' => 'attachment-metadata-assistant', 'fat_attachment_id' => (int) $attachment->ID ) ) ); ?>">
+                                    <?php esc_html_e( 'Generate Metadata', 'fabled-ai-tools' ); ?>
+                                </a>
+                            </td>
+                        </tr>
+                    <?php endforeach; ?>
+                <?php endif; ?>
+            </tbody>
+        </table>
+        <?php
+    }
+
+    protected function find_posts_missing_excerpt( $limit = 12 ) {
+        return $this->find_gap_posts(
+            function ( $post_id ) {
+                return '' === trim( (string) get_post_field( 'post_excerpt', $post_id ) );
+            },
+            $limit
+        );
+    }
+
+    protected function find_posts_missing_featured_image( $limit = 12 ) {
+        return $this->find_gap_posts(
+            function ( $post_id ) {
+                return ! has_post_thumbnail( $post_id );
+            },
+            $limit,
+            array(
+                'meta_query' => array(
+                    'relation' => 'OR',
+                    array(
+                        'key'     => '_thumbnail_id',
+                        'compare' => 'NOT EXISTS',
+                    ),
+                    array(
+                        'key'   => '_thumbnail_id',
+                        'value' => '',
+                    ),
+                ),
+            )
+        );
+    }
+
+    protected function find_gap_posts( $predicate, $limit = 12, $query_overrides = array() ) {
+        $limit      = max( 1, absint( $limit ) );
+        $per_page   = 20;
+        $page       = 1;
+        $max_pages  = 5;
+        $found      = array();
+        $post_types = array_diff( get_post_types( array( 'public' => true ), 'names' ), array( 'attachment' ) );
+
+        while ( count( $found ) < $limit && $page <= $max_pages ) {
+            $query_args = wp_parse_args(
+                $query_overrides,
+                array(
+                    'post_type'              => $post_types,
+                    'post_status'            => array( 'publish', 'draft' ),
+                    'posts_per_page'         => $per_page,
+                    'paged'                  => $page,
+                    'orderby'                => 'modified',
+                    'order'                  => 'DESC',
+                    'no_found_rows'          => true,
+                    'update_post_meta_cache' => false,
+                    'update_post_term_cache' => false,
+                )
+            );
+
+            $query = new WP_Query( $query_args );
+            if ( empty( $query->posts ) ) {
+                break;
+            }
+
+            foreach ( $query->posts as $post ) {
+                if ( ! user_can( get_current_user_id(), 'edit_post', $post->ID ) ) {
+                    continue;
+                }
+
+                if ( ! call_user_func( $predicate, $post->ID ) ) {
+                    continue;
+                }
+
+                $found[] = $post;
+                if ( count( $found ) >= $limit ) {
+                    break;
+                }
+            }
+
+            if ( count( $query->posts ) < $per_page ) {
+                break;
+            }
+            ++$page;
+        }
+
+        return $found;
+    }
+
+    protected function find_attachments_missing_alt_text( $limit = 12 ) {
+        $limit     = max( 1, absint( $limit ) );
+        $per_page  = 20;
+        $page      = 1;
+        $max_pages = 5;
+        $found     = array();
+
+        while ( count( $found ) < $limit && $page <= $max_pages ) {
+            $query = new WP_Query(
+                array(
+                    'post_type'              => 'attachment',
+                    'post_status'            => 'inherit',
+                    'post_mime_type'         => 'image',
+                    'posts_per_page'         => $per_page,
+                    'paged'                  => $page,
+                    'orderby'                => 'modified',
+                    'order'                  => 'DESC',
+                    'no_found_rows'          => true,
+                    'update_post_meta_cache' => true,
+                    'update_post_term_cache' => false,
+                    'meta_query'             => array(
+                        'relation' => 'OR',
+                        array(
+                            'key'     => '_wp_attachment_image_alt',
+                            'compare' => 'NOT EXISTS',
+                        ),
+                        array(
+                            'key'   => '_wp_attachment_image_alt',
+                            'value' => '',
+                        ),
+                    ),
+                )
+            );
+
+            if ( empty( $query->posts ) ) {
+                break;
+            }
+
+            foreach ( $query->posts as $attachment ) {
+                if ( ! user_can( get_current_user_id(), 'edit_post', $attachment->ID ) ) {
+                    continue;
+                }
+
+                $alt = trim( (string) get_post_meta( $attachment->ID, '_wp_attachment_image_alt', true ) );
+                if ( '' !== $alt ) {
+                    continue;
+                }
+
+                $found[] = $attachment;
+                if ( count( $found ) >= $limit ) {
+                    break;
+                }
+            }
+
+            if ( count( $query->posts ) < $per_page ) {
+                break;
+            }
+            ++$page;
+        }
+
+        return $found;
+    }
+
+    protected function runner_launch_url( $args = array() ) {
+        $base_args = array_filter(
+            array(
+                'page' => 'fabled-ai-tools',
+            )
+        );
+
+        return add_query_arg( array_merge( $base_args, $args ), admin_url( 'admin.php' ) );
+    }
+
+    protected function runner_launch_context_from_request() {
+        if ( 'fabled-ai-tools' !== $this->current_page() ) {
+            return array();
+        }
+
+        return array(
+            'toolId'        => isset( $_GET['fat_tool_id'] ) ? absint( $_GET['fat_tool_id'] ) : 0,
+            'toolSlug'      => isset( $_GET['fat_tool'] ) ? sanitize_title( wp_unslash( $_GET['fat_tool'] ) ) : '',
+            'sourcePostId'  => isset( $_GET['fat_source_post'] ) ? absint( $_GET['fat_source_post'] ) : 0,
+            'sourceStatus'  => isset( $_GET['fat_source_status'] ) ? sanitize_key( wp_unslash( $_GET['fat_source_status'] ) ) : '',
+            'targetPostId'  => isset( $_GET['fat_target_post'] ) ? absint( $_GET['fat_target_post'] ) : 0,
+            'attachmentId'  => isset( $_GET['fat_attachment_id'] ) ? absint( $_GET['fat_attachment_id'] ) : 0,
+        );
+    }
+
     protected function current_page() {
         return isset( $_GET['page'] ) ? sanitize_key( wp_unslash( $_GET['page'] ) ) : '';
     }
 
     protected function is_plugin_page() {
-        return in_array( $this->current_page(), array( 'fabled-ai-tools', 'fat-tools', 'fat-tool-edit', 'fat-logs', 'fat-settings' ), true );
+        return in_array( $this->current_page(), array( 'fabled-ai-tools', 'fat-needs-attention', 'fat-tools', 'fat-tool-edit', 'fat-logs', 'fat-settings' ), true );
     }
 
     protected function current_user_can_manage_tools() {

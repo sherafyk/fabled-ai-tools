@@ -235,6 +235,13 @@ Validation rules enforce:
 
 Run logs are available in **Fabled AI Tools → Logs**.
 
+The plugin now also includes **Fabled AI Tools → Needs Attention** with:
+- posts missing excerpts
+- posts missing featured images
+- image attachments missing alt text
+- quick launch links into the runner with preselected workflow + target/source
+- a lightweight recent-failures health summary linked to filtered logs
+
 Settings now include operational controls for:
 - pausing all run/apply execution globally
 - log retention days (automatic daily cleanup)

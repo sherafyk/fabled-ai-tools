@@ -162,6 +162,40 @@ class FAT_Runs_Repository {
 
         return (int) $wpdb->query( "DELETE FROM {$this->table}" );
     }
+
+    public function count_runs_since( $status, $since_mysql ) {
+        global $wpdb;
+
+        $status = sanitize_key( $status );
+        $since  = is_string( $since_mysql ) ? $since_mysql : '';
+        if ( '' === $status || '' === $since ) {
+            return 0;
+        }
+
+        return (int) $wpdb->get_var(
+            $wpdb->prepare(
+                "SELECT COUNT(*) FROM {$this->table} WHERE status = %s AND created_at >= %s",
+                $status,
+                $since
+            )
+        );
+    }
+
+    public function get_recent_failures( $limit = 5 ) {
+        global $wpdb;
+
+        $limit = max( 1, absint( $limit ) );
+        $rows  = $wpdb->get_results(
+            $wpdb->prepare(
+                "SELECT * FROM {$this->table} WHERE status = %s ORDER BY created_at DESC LIMIT %d",
+                'error',
+                $limit
+            ),
+            ARRAY_A
+        );
+
+        return array_map( array( $this, 'map_row' ), (array) $rows );
+    }
     protected function maybe_json_encode( $value ) {
         if ( null === $value || '' === $value ) {
             return null;
