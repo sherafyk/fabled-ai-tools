@@ -1,10 +1,12 @@
 <?php
 /**
  * Plugin Name: Fabled AI Tools
- * Plugin URI: https://example.com/
+ * Plugin URI: https://fabledsky.com/community-projects/
  * Description: Modular admin-managed AI tools for WordPress using server-side OpenAI Responses API calls.
  * Version: 1.1.0
- * Author: OpenAI
+ * Author: Fabled Sky Research
+ * Author URI: https://fabledsky.com/community-projects/
+ * Copyright: 2026 Fabled Sky Research
  * Text Domain: fabled-ai-tools
  */
 
