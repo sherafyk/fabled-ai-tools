@@ -11,14 +11,16 @@ class FAT_Tool_Runner {
     protected $prompt_engine;
     protected $client;
     protected $usage_limiter;
+    protected $featured_image_generator;
 
-    public function __construct( FAT_Tools_Repository $tools_repo, FAT_Runs_Repository $runs_repo, FAT_Settings $settings, FAT_Prompt_Engine $prompt_engine, FAT_OpenAI_Client $client, FAT_Usage_Limiter $usage_limiter ) {
+    public function __construct( FAT_Tools_Repository $tools_repo, FAT_Runs_Repository $runs_repo, FAT_Settings $settings, FAT_Prompt_Engine $prompt_engine, FAT_OpenAI_Client $client, FAT_Usage_Limiter $usage_limiter, FAT_Featured_Image_Generator $featured_image_generator ) {
         $this->tools_repo     = $tools_repo;
         $this->runs_repo      = $runs_repo;
         $this->settings       = $settings;
         $this->prompt_engine  = $prompt_engine;
         $this->client         = $client;
         $this->usage_limiter  = $usage_limiter;
+        $this->featured_image_generator = $featured_image_generator;
     }
 
     public function get_accessible_tools_for_user( $user ) {
@@ -96,6 +98,8 @@ class FAT_Tool_Runner {
             return new WP_Error( 'fat_tool_forbidden', __( 'You are not allowed to run this tool.', 'fabled-ai-tools' ), array( 'status' => 403 ) );
         }
 
+        $workflow = $this->tool_workflow_type( $tool );
+
         $resolved_inputs = $this->resolve_contextual_inputs( $tool, $raw_inputs );
         if ( is_wp_error( $resolved_inputs ) ) {
             return $resolved_inputs;
@@ -110,6 +114,10 @@ class FAT_Tool_Runner {
         if ( is_wp_error( $can_run ) ) {
             $can_run->add_data( array( 'status' => 429 ) );
             return $can_run;
+        }
+
+        if ( 'featured_image_generator' === $workflow ) {
+            return $this->execute_featured_image_workflow( $tool, $resolved_inputs, $user );
         }
 
         $inputs        = $validated['inputs'];
@@ -243,6 +251,11 @@ class FAT_Tool_Runner {
             return new WP_Error( 'fat_tool_forbidden', __( 'You are not allowed to apply outputs for this tool.', 'fabled-ai-tools' ), array( 'status' => 403 ) );
         }
 
+        if ( 'featured_image_generator' === $this->tool_workflow_type( $tool ) ) {
+            $attachment_id = absint( FAT_Helpers::array_get( $outputs, '__fat_featured_attachment_id', 0 ) );
+            return $this->featured_image_generator->apply_featured_image( $target_id, $attachment_id );
+        }
+
         if ( ! in_array( $target_type, array( 'post', 'attachment' ), true ) || $target_id <= 0 ) {
             return new WP_Error( 'fat_invalid_target', __( 'A valid apply target is required.', 'fabled-ai-tools' ), array( 'status' => 400 ) );
         }
@@ -260,19 +273,7 @@ class FAT_Tool_Runner {
             return new WP_Error( 'fat_no_apply_fields', __( 'Select at least one field to apply.', 'fabled-ai-tools' ), array( 'status' => 400 ) );
         }
 
-        error_log(
-            sprintf(
-                'FAT APPLY: incoming target_type=%1$s target_id=%2$d raw_apply_fields=%3$s apply_fields=%4$s outputs=%5$s',
-                $target_type,
-                $target_id,
-                wp_json_encode( $raw_apply_fields ),
-                wp_json_encode( $apply_fields ),
-                wp_json_encode( is_array( $outputs ) ? $outputs : array() )
-            )
-        );
-
         $mappings = $this->get_allowed_apply_mappings( $tool, $target_type );
-        error_log( 'FAT APPLY: allowed mappings=' . wp_json_encode( array_values( $mappings ) ) );
         if ( empty( $mappings ) ) {
             return new WP_Error( 'fat_apply_not_configured', __( 'This tool has no apply mappings for the selected target type.', 'fabled-ai-tools' ), array( 'status' => 400 ) );
         }
@@ -293,7 +294,6 @@ class FAT_Tool_Runner {
             }
             $selected_mappings[ $field_key ] = $mappings[ $field_key ];
         }
-        error_log( 'FAT APPLY: selected mappings=' . wp_json_encode( array_values( $selected_mappings ) ) );
 
         $target_post = get_post( $target_id );
         if ( ! $target_post ) {
@@ -336,7 +336,6 @@ class FAT_Tool_Runner {
             if ( 'alt_text' === $wp_field ) {
                 update_post_meta( $target_id, '_wp_attachment_image_alt', $value );
                 $updated_fields[] = $field ? $field : $apply_key;
-                error_log( sprintf( 'FAT APPLY: updated attachment alt_text target_id=%d', $target_id ) );
                 continue;
             }
 
@@ -344,31 +343,11 @@ class FAT_Tool_Runner {
             $updated_fields[]              = $field ? $field : $apply_key;
         }
 
-        error_log( 'FAT APPLY: mapped wp_update_post payload=' . wp_json_encode( $update_post_data ) );
-
         if ( count( $update_post_data ) > 1 ) {
             $updated_post_id = wp_update_post( wp_slash( $update_post_data ), true );
-            error_log(
-                sprintf(
-                    'FAT APPLY: wp_update_post result=%1$s is_wp_error=%2$s',
-                    is_wp_error( $updated_post_id ) ? $updated_post_id->get_error_message() : (string) $updated_post_id,
-                    is_wp_error( $updated_post_id ) ? 'yes' : 'no'
-                )
-            );
             if ( is_wp_error( $updated_post_id ) ) {
                 return new WP_Error( 'fat_apply_failed', $updated_post_id->get_error_message(), array( 'status' => 500 ) );
             }
-        }
-
-        $refreshed_post = get_post( $target_id );
-        if ( $refreshed_post ) {
-            error_log(
-                sprintf(
-                    'FAT APPLY: refreshed target_id=%1$d post_excerpt=%2$s',
-                    $target_id,
-                    wp_json_encode( (string) $refreshed_post->post_excerpt )
-                )
-            );
         }
 
         return array(
@@ -662,5 +641,80 @@ class FAT_Tool_Runner {
         $value = strtolower( sanitize_text_field( (string) $value ) );
         $value = preg_replace( '/[^a-z0-9_:\-]/', '', $value );
         return is_string( $value ) ? trim( $value ) : '';
+    }
+
+    protected function execute_featured_image_workflow( $tool, $inputs, $user ) {
+        $request_start = microtime( true );
+        $result        = $this->featured_image_generator->execute( $tool, $inputs );
+        $latency_ms    = (int) round( ( microtime( true ) - $request_start ) * 1000 );
+
+        if ( is_wp_error( $result ) ) {
+            $this->log_run(
+                $tool,
+                $user,
+                array(
+                    'status'          => 'error',
+                    'request_preview' => FAT_Helpers::build_preview_from_inputs( $inputs ),
+                    'request_payload' => ! empty( $tool['log_inputs'] ) ? $inputs : null,
+                    'response_payload'=> ! empty( $tool['log_outputs'] ) ? $result->get_error_data() : null,
+                    'error_message'   => $result->get_error_message(),
+                    'model_used'      => (string) FAT_Helpers::array_get( $result->get_error_data(), 'model', '' ),
+                    'latency_ms'      => $latency_ms,
+                )
+            );
+
+            return $result;
+        }
+
+        $outputs = array(
+            'title'       => (string) FAT_Helpers::array_get( $result, 'title', '' ),
+            'alt_text'    => (string) FAT_Helpers::array_get( $result, 'alt_text', '' ),
+            'description' => (string) FAT_Helpers::array_get( $result, 'description', '' ),
+            '__fat_featured_attachment_id' => (string) FAT_Helpers::array_get( $result, 'featured_attachment_id', 0 ),
+        );
+
+        $this->log_run(
+            $tool,
+            $user,
+            array(
+                'status'            => 'success',
+                'request_preview'   => FAT_Helpers::build_preview_from_inputs( $inputs ),
+                'response_preview'  => FAT_Helpers::build_preview_from_outputs( $outputs ),
+                'request_payload'   => ! empty( $tool['log_inputs'] ) ? array(
+                    'prompt' => FAT_Helpers::array_get( $result, 'prompt', '' ),
+                    'model'  => FAT_Helpers::array_get( $result, 'image_model', '' ),
+                    'quality' => FAT_Helpers::array_get( $result, 'image_quality', '' ),
+                    'source_size' => FAT_Helpers::array_get( $result, 'source_size', '' ),
+                ) : null,
+                'response_payload'  => ! empty( $tool['log_outputs'] ) ? $result : null,
+                'error_message'     => '',
+                'model_used'        => (string) FAT_Helpers::array_get( $result, 'image_model', '' ),
+                'prompt_tokens'     => FAT_Helpers::array_get( FAT_Helpers::array_get( $result, 'usage', array() ), 'input_tokens', null ),
+                'completion_tokens' => FAT_Helpers::array_get( FAT_Helpers::array_get( $result, 'usage', array() ), 'output_tokens', null ),
+                'total_tokens'      => FAT_Helpers::array_get( FAT_Helpers::array_get( $result, 'usage', array() ), 'total_tokens', null ),
+                'latency_ms'        => $latency_ms,
+                'openai_request_id' => (string) FAT_Helpers::array_get( FAT_Helpers::array_get( $result, 'request_ids', array() ), 'image', '' ),
+            )
+        );
+
+        return array(
+            'tool'    => array(
+                'id'   => $tool['id'],
+                'name' => $tool['name'],
+                'slug' => $tool['slug'],
+            ),
+            'outputs' => $outputs,
+            'meta'    => array(
+                'workflow'   => 'featured_image_generator',
+                'model'      => (string) FAT_Helpers::array_get( $result, 'image_model', '' ),
+                'latency_ms' => $latency_ms,
+                'usage'      => FAT_Helpers::array_get( $result, 'usage', array() ),
+                'image'      => $result,
+            ),
+        );
+    }
+
+    protected function tool_workflow_type( $tool ) {
+        return sanitize_key( FAT_Helpers::array_get( FAT_Helpers::array_get( $tool, 'wp_integration', array() ), 'workflow', '' ) );
     }
 }

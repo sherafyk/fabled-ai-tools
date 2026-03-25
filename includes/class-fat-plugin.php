@@ -14,6 +14,7 @@ class FAT_Plugin {
     protected $prompt_engine;
     protected $client;
     protected $usage_limiter;
+    protected $featured_image_generator;
     protected $tool_runner;
     protected $rest_controller;
     protected $admin;
@@ -36,7 +37,8 @@ class FAT_Plugin {
         $this->prompt_engine   = new FAT_Prompt_Engine();
         $this->client          = new FAT_OpenAI_Client( $this->settings );
         $this->usage_limiter   = new FAT_Usage_Limiter( $this->runs_repo, $this->settings );
-        $this->tool_runner     = new FAT_Tool_Runner( $this->tools_repo, $this->runs_repo, $this->settings, $this->prompt_engine, $this->client, $this->usage_limiter );
+        $this->featured_image_generator = new FAT_Featured_Image_Generator( $this->client );
+        $this->tool_runner     = new FAT_Tool_Runner( $this->tools_repo, $this->runs_repo, $this->settings, $this->prompt_engine, $this->client, $this->usage_limiter, $this->featured_image_generator );
         $this->rest_controller = new FAT_REST_Controller( $this->tool_runner );
         $this->admin           = new FAT_Admin( $this->settings, $this->tools_repo, $this->runs_repo, $this->validator, $this->prompt_engine, $this->tool_runner );
 
