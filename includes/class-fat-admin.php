@@ -554,6 +554,7 @@ class FAT_Admin {
             $tool['output_schema'] = array( $this->default_output_row() );
         }
         $wp_integration_form = $this->wp_integration_form_state( FAT_Helpers::array_get( $tool, 'wp_integration', array() ) );
+        $workflow_fields     = $this->builtin_workflow_form_fields( $wp_integration_form['workflow'] );
         if ( ! empty( $wp_integration_form['enabled'] ) && empty( $wp_integration_form['mappings'] ) ) {
             $wp_integration_form['mappings'] = array( $this->default_wp_mapping_row() );
         }
@@ -568,6 +569,7 @@ class FAT_Admin {
                     <p>
                         <strong><?php esc_html_e( 'Built-in workflow tool.', 'fabled-ai-tools' ); ?></strong>
                         <?php esc_html_e( 'This tool is seeded by the plugin and can be reset to its default settings.', 'fabled-ai-tools' ); ?>
+                        <?php esc_html_e( 'Reset restores prompts, schema, WordPress integration, and workflow configuration.', 'fabled-ai-tools' ); ?>
                         <a href="<?php echo esc_url( $this->tool_action_url( 'reset_default', $tool['id'] ) ); ?>" onclick="return confirm('<?php echo esc_js( __( 'Reset this built-in tool to its default configuration?', 'fabled-ai-tools' ) ); ?>');"><?php esc_html_e( 'Reset now', 'fabled-ai-tools' ); ?></a>
                         |
                         <a href="<?php echo esc_url( $this->tool_action_url( 'export', $tool['id'] ) ); ?>"><?php esc_html_e( 'Export JSON', 'fabled-ai-tools' ); ?></a>
@@ -728,20 +730,51 @@ class FAT_Admin {
                 <div class="fat-card">
                     <h2><?php esc_html_e( 'WordPress Apply Integration', 'fabled-ai-tools' ); ?></h2>
                     <?php if ( ! empty( $wp_integration_form['workflow'] ) ) : ?>
-                        <input type="hidden" name="wp_integration_workflow" value="<?php echo esc_attr( $wp_integration_form['workflow'] ); ?>" />
-                        <?php foreach ( (array) FAT_Helpers::array_get( $wp_integration_form, 'workflow_config', array() ) as $workflow_key => $workflow_value ) : ?>
-                            <input type="hidden" name="wp_integration_workflow_config[<?php echo esc_attr( $workflow_key ); ?>]" value="<?php echo esc_attr( $workflow_value ); ?>" />
-                        <?php endforeach; ?>
-                        <p class="description">
-                            <?php
-                            printf(
-                                /* translators: %s: workflow machine name */
-                                esc_html__( 'Workflow type: %s (managed by built-in workflow defaults).', 'fabled-ai-tools' ),
-                                esc_html( $wp_integration_form['workflow'] )
-                            );
-                            ?>
-                        </p>
+                        <table class="form-table" role="presentation">
+                            <tr>
+                                <th scope="row"><label for="fat-workflow-type"><?php esc_html_e( 'Workflow Type', 'fabled-ai-tools' ); ?></label></th>
+                                <td>
+                                    <input id="fat-workflow-type" type="text" class="regular-text" value="<?php echo esc_attr( $wp_integration_form['workflow'] ); ?>" readonly />
+                                    <input type="hidden" name="wp_integration_workflow" value="<?php echo esc_attr( $wp_integration_form['workflow'] ); ?>" />
+                                    <p class="description"><?php esc_html_e( 'Built-in workflow identity is fixed and preserved across saves.', 'fabled-ai-tools' ); ?></p>
+                                </td>
+                            </tr>
+                        </table>
                     <?php endif; ?>
+
+                    <?php if ( ! empty( $workflow_fields ) ) : ?>
+                        <h3><?php esc_html_e( 'Built-in Workflow Configuration', 'fabled-ai-tools' ); ?></h3>
+                        <table class="form-table" role="presentation">
+                            <?php foreach ( $workflow_fields as $workflow_key => $field ) : ?>
+                                <?php
+                                $field_id    = 'fat-workflow-' . sanitize_html_class( $workflow_key );
+                                $field_value = (string) FAT_Helpers::array_get( $wp_integration_form['workflow_config'], $workflow_key, FAT_Helpers::array_get( $field, 'default', '' ) );
+                                $is_readonly = ! empty( $field['readonly'] );
+                                ?>
+                                <tr>
+                                    <th scope="row"><label for="<?php echo esc_attr( $field_id ); ?>"><?php echo esc_html( FAT_Helpers::array_get( $field, 'label', $workflow_key ) ); ?></label></th>
+                                    <td>
+                                        <?php if ( 'select' === FAT_Helpers::array_get( $field, 'type', 'text' ) ) : ?>
+                                            <select id="<?php echo esc_attr( $field_id ); ?>" name="wp_integration_workflow_config[<?php echo esc_attr( $workflow_key ); ?>]" <?php disabled( $is_readonly ); ?>>
+                                                <?php foreach ( (array) FAT_Helpers::array_get( $field, 'options', array() ) as $option_value => $option_label ) : ?>
+                                                    <option value="<?php echo esc_attr( $option_value ); ?>" <?php selected( $field_value, (string) $option_value ); ?>><?php echo esc_html( $option_label ); ?></option>
+                                                <?php endforeach; ?>
+                                            </select>
+                                            <?php if ( $is_readonly ) : ?>
+                                                <input type="hidden" name="wp_integration_workflow_config[<?php echo esc_attr( $workflow_key ); ?>]" value="<?php echo esc_attr( $field_value ); ?>" />
+                                            <?php endif; ?>
+                                        <?php else : ?>
+                                            <input id="<?php echo esc_attr( $field_id ); ?>" name="wp_integration_workflow_config[<?php echo esc_attr( $workflow_key ); ?>]" type="text" class="regular-text" value="<?php echo esc_attr( $field_value ); ?>" <?php echo $is_readonly ? 'readonly' : ''; ?> />
+                                        <?php endif; ?>
+                                        <?php if ( ! empty( $field['description'] ) ) : ?>
+                                            <p class="description"><?php echo esc_html( $field['description'] ); ?></p>
+                                        <?php endif; ?>
+                                    </td>
+                                </tr>
+                            <?php endforeach; ?>
+                        </table>
+                    <?php endif; ?>
+
                     <table class="form-table" role="presentation">
                         <tr>
                             <th scope="row"><?php esc_html_e( 'Enable Integration', 'fabled-ai-tools' ); ?></th>
@@ -1540,6 +1573,74 @@ class FAT_Admin {
             'apply_target' => $apply_target,
             'mappings'     => (array) FAT_Helpers::array_get( $apply, 'mappings', array() ),
         );
+    }
+
+    protected function builtin_workflow_form_fields( $workflow ) {
+        $workflow = sanitize_key( $workflow );
+
+        if ( 'featured_image_generator' === $workflow ) {
+            return array(
+                'image_model' => array(
+                    'label'       => __( 'Image Model', 'fabled-ai-tools' ),
+                    'type'        => 'text',
+                    'default'     => 'gpt-image-1-mini',
+                    'readonly'    => 1,
+                    'description' => __( 'Managed by the built-in workflow. Reset the tool to restore default model behavior.', 'fabled-ai-tools' ),
+                ),
+                'image_quality' => array(
+                    'label'       => __( 'Image Quality', 'fabled-ai-tools' ),
+                    'type'        => 'text',
+                    'default'     => 'low',
+                    'readonly'    => 1,
+                    'description' => __( 'Managed by the built-in workflow to keep generation cost and latency predictable.', 'fabled-ai-tools' ),
+                ),
+                'source_size' => array(
+                    'label'       => __( 'Generated Source Size', 'fabled-ai-tools' ),
+                    'type'        => 'text',
+                    'default'     => '1536x1024',
+                    'description' => __( 'Editable. Use WIDTHxHEIGHT (for example 1536x1024).', 'fabled-ai-tools' ),
+                ),
+                'featured_size' => array(
+                    'label'       => __( 'Featured Derivative Size', 'fabled-ai-tools' ),
+                    'type'        => 'text',
+                    'default'     => '1200x675',
+                    'description' => __( 'Editable. Use WIDTHxHEIGHT (for example 1200x675).', 'fabled-ai-tools' ),
+                ),
+                'featured_format' => array(
+                    'label'       => __( 'Featured Derivative Format', 'fabled-ai-tools' ),
+                    'type'        => 'select',
+                    'default'     => 'png',
+                    'options'     => array(
+                        'png'  => __( 'PNG', 'fabled-ai-tools' ),
+                        'webp' => __( 'WebP', 'fabled-ai-tools' ),
+                    ),
+                    'description' => __( 'Editable. Controls how the featured-image derivative is saved.', 'fabled-ai-tools' ),
+                ),
+            );
+        }
+
+        if ( 'uploaded_image_processor' === $workflow ) {
+            return array(
+                'target_size' => array(
+                    'label'       => __( 'Processed Image Size', 'fabled-ai-tools' ),
+                    'type'        => 'text',
+                    'default'     => '1200x675',
+                    'description' => __( 'Editable. Use WIDTHxHEIGHT (for example 1200x675).', 'fabled-ai-tools' ),
+                ),
+                'target_format' => array(
+                    'label'       => __( 'Processed Image Format', 'fabled-ai-tools' ),
+                    'type'        => 'select',
+                    'default'     => 'webp',
+                    'options'     => array(
+                        'webp' => __( 'WebP', 'fabled-ai-tools' ),
+                        'png'  => __( 'PNG', 'fabled-ai-tools' ),
+                    ),
+                    'description' => __( 'Editable. Controls the derivative file format for uploaded images.', 'fabled-ai-tools' ),
+                ),
+            );
+        }
+
+        return array();
     }
 
     protected function store_form_state( $tool_id, $data, $validation ) {

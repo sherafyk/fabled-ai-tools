@@ -87,6 +87,8 @@ Fabled AI Tools lets admins define tool schemas and prompts, then lets authorize
 
 The plugin seeds built-ins on activation/upgrade.
 
+When editing built-ins in **Tools → Edit Tool**, the **WordPress Apply Integration** card now includes an explicit **Built-in Workflow Configuration** panel. Critical workflow identity remains fixed, while only runtime-supported workflow settings are configurable.
+
 ### 1) Featured Image Prompt
 
 - Input: article body.
