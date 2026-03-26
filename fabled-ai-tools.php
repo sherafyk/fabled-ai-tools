@@ -35,8 +35,11 @@ require_once FAT_PLUGIN_DIR . 'includes/class-fat-featured-image-generator.php';
 require_once FAT_PLUGIN_DIR . 'includes/class-fat-uploaded-image-processor.php';
 require_once FAT_PLUGIN_DIR . 'includes/class-fat-attachment-metadata-assistant.php';
 require_once FAT_PLUGIN_DIR . 'includes/class-fat-usage-limiter.php';
+require_once FAT_PLUGIN_DIR . 'includes/class-fat-runner-context-service.php';
+require_once FAT_PLUGIN_DIR . 'includes/class-fat-runner-apply-service.php';
 require_once FAT_PLUGIN_DIR . 'includes/class-fat-tool-runner.php';
 require_once FAT_PLUGIN_DIR . 'includes/class-fat-rest-controller.php';
+require_once FAT_PLUGIN_DIR . 'includes/class-fat-admin-launch-service.php';
 require_once FAT_PLUGIN_DIR . 'includes/class-fat-admin.php';
 require_once FAT_PLUGIN_DIR . 'includes/class-fat-plugin.php';
 
