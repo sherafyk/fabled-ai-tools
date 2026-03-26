@@ -58,15 +58,7 @@ class FAT_Tool_Validator {
 
         return array(
             'workflow' => $workflow,
-            'workflow_config' => array(
-                'image_model'     => sanitize_text_field( FAT_Helpers::array_get( $workflow_config, 'image_model', 'gpt-image-1-mini' ) ),
-                'image_quality'   => sanitize_text_field( FAT_Helpers::array_get( $workflow_config, 'image_quality', 'low' ) ),
-                'source_size'     => sanitize_text_field( FAT_Helpers::array_get( $workflow_config, 'source_size', '1536x1024' ) ),
-                'featured_size'   => sanitize_text_field( FAT_Helpers::array_get( $workflow_config, 'featured_size', '1200x675' ) ),
-                'featured_format' => sanitize_text_field( FAT_Helpers::array_get( $workflow_config, 'featured_format', 'png' ) ),
-                'target_size'    => sanitize_text_field( FAT_Helpers::array_get( $workflow_config, 'target_size', '1200x675' ) ),
-                'target_format'  => sanitize_text_field( FAT_Helpers::array_get( $workflow_config, 'target_format', 'webp' ) ),
-            ),
+            'workflow_config' => $this->normalize_workflow_config( $workflow, $workflow_config ),
             'source' => array(
                 'type'           => $source_type,
                 'allow_manual'   => FAT_Helpers::to_bool_flag( FAT_Helpers::array_get( $source, 'allow_manual', 1 ) ),
@@ -249,9 +241,37 @@ class FAT_Tool_Validator {
         $source = (array) FAT_Helpers::array_get( $config, 'source', array() );
         $apply  = (array) FAT_Helpers::array_get( $config, 'apply', array() );
         $workflow = sanitize_key( FAT_Helpers::array_get( $config, 'workflow', '' ) );
+        $workflow_config = (array) FAT_Helpers::array_get( $config, 'workflow_config', array() );
 
         if ( ! in_array( $workflow, array( '', 'featured_image_generator', 'uploaded_image_processor', 'attachment_metadata_assistant' ), true ) ) {
             $errors[] = __( 'Unsupported workflow value for WordPress integration.', 'fabled-ai-tools' );
+        }
+
+        $workflow_rules = $this->workflow_config_rules( $workflow );
+        if ( empty( $workflow_rules ) && ! empty( $workflow_config ) ) {
+            $errors[] = __( 'This workflow does not support workflow configuration fields.', 'fabled-ai-tools' );
+        }
+        foreach ( $workflow_config as $config_key => $config_value ) {
+            $config_key = sanitize_key( $config_key );
+            if ( ! isset( $workflow_rules[ $config_key ] ) ) {
+                /* translators: %s: workflow config key */
+                $errors[] = sprintf( __( 'Unsupported workflow configuration key: %s', 'fabled-ai-tools' ), $config_key );
+                continue;
+            }
+
+            $value = sanitize_text_field( $config_value );
+            $rule  = (array) $workflow_rules[ $config_key ];
+            if ( 'dimensions' === FAT_Helpers::array_get( $rule, 'type', '' ) && ! preg_match( '/^\d{2,5}x\d{2,5}$/', $value ) ) {
+                /* translators: %s: workflow config key */
+                $errors[] = sprintf( __( 'Workflow configuration %s must use WIDTHxHEIGHT format.', 'fabled-ai-tools' ), $config_key );
+            }
+            if ( 'enum' === FAT_Helpers::array_get( $rule, 'type', '' ) ) {
+                $allowed = (array) FAT_Helpers::array_get( $rule, 'allowed', array() );
+                if ( ! in_array( $value, $allowed, true ) ) {
+                    /* translators: %s: workflow config key */
+                    $errors[] = sprintf( __( 'Workflow configuration %s has an unsupported value.', 'fabled-ai-tools' ), $config_key );
+                }
+            }
         }
 
         $source_type = sanitize_key( FAT_Helpers::array_get( $source, 'type', '' ) );
@@ -337,5 +357,63 @@ class FAT_Tool_Validator {
         }
 
         return array_values( array_unique( array_map( 'sanitize_key', $matches[1] ) ) );
+    }
+
+    protected function normalize_workflow_config( $workflow, $workflow_config ) {
+        $workflow_config = is_array( $workflow_config ) ? $workflow_config : array();
+        $rules           = $this->workflow_config_rules( $workflow );
+        $output          = array();
+
+        foreach ( $rules as $config_key => $rule ) {
+            $output[ $config_key ] = sanitize_text_field( FAT_Helpers::array_get( $workflow_config, $config_key, FAT_Helpers::array_get( $rule, 'default', '' ) ) );
+        }
+
+        return $output;
+    }
+
+    protected function workflow_config_rules( $workflow ) {
+        $workflow = sanitize_key( $workflow );
+        if ( 'featured_image_generator' === $workflow ) {
+            return array(
+                'image_model' => array(
+                    'type'    => 'string',
+                    'default' => 'gpt-image-1-mini',
+                ),
+                'image_quality' => array(
+                    'type'    => 'enum',
+                    'default' => 'low',
+                    'allowed' => array( 'low', 'medium', 'high' ),
+                ),
+                'source_size' => array(
+                    'type'    => 'dimensions',
+                    'default' => '1536x1024',
+                ),
+                'featured_size' => array(
+                    'type'    => 'dimensions',
+                    'default' => '1200x675',
+                ),
+                'featured_format' => array(
+                    'type'    => 'enum',
+                    'default' => 'png',
+                    'allowed' => array( 'png', 'webp' ),
+                ),
+            );
+        }
+
+        if ( 'uploaded_image_processor' === $workflow ) {
+            return array(
+                'target_size' => array(
+                    'type'    => 'dimensions',
+                    'default' => '1200x675',
+                ),
+                'target_format' => array(
+                    'type'    => 'enum',
+                    'default' => 'webp',
+                    'allowed' => array( 'webp', 'png' ),
+                ),
+            );
+        }
+
+        return array();
     }
 }
