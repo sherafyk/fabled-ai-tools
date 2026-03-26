@@ -162,12 +162,12 @@ Notes:
    - image preview
    - original + derivative attachment IDs
    - generated metadata
-6. Select a post in apply section.
+6. Select a target content item in apply section.
 7. Click **Apply as Featured Image**.
 
 Notes:
 - Generation/save may be combined in one run action.
-- Featured-image apply remains explicit and requires post selection.
+- Featured-image apply remains explicit and requires selecting editable content that supports featured images.
 
 ---
 
@@ -175,7 +175,7 @@ Notes:
 
 For schema-based text tools, apply is driven by `wp_integration.apply.mappings`.
 
-### Supported post fields
+### Supported content fields (non-attachment post objects)
 
 - `post_title`
 - `post_excerpt`

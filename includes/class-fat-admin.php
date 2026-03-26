@@ -150,14 +150,14 @@ class FAT_Admin {
                     'contentSource'  => __( 'Content Source', 'fabled-ai-tools' ),
                     'pasteContent'   => __( 'Paste Content', 'fabled-ai-tools' ),
                     'selectDraft'    => __( 'Select Draft', 'fabled-ai-tools' ),
-                    'selectPublished'=> __( 'Select Published Post', 'fabled-ai-tools' ),
-                    'loadingPosts'   => __( 'Loading posts…', 'fabled-ai-tools' ),
-                    'choosePost'     => __( 'Choose a post', 'fabled-ai-tools' ),
-                    'searchPosts'    => __( 'Search posts by title…', 'fabled-ai-tools' ),
-                    'noPostsFound'   => __( 'No posts found for this status.', 'fabled-ai-tools' ),
-                    'loadPostsError' => __( 'Unable to load posts for this source.', 'fabled-ai-tools' ),
-                    'postSelectionRequired' => __( 'Please select a post for the chosen content source.', 'fabled-ai-tools' ),
-                    'bodyFilledFromPost' => __( 'Article body will be pulled from the selected post.', 'fabled-ai-tools' ),
+                    'selectPublished'=> __( 'Select Published Content', 'fabled-ai-tools' ),
+                    'loadingPosts'   => __( 'Loading content…', 'fabled-ai-tools' ),
+                    'choosePost'     => __( 'Choose a content item', 'fabled-ai-tools' ),
+                    'searchPosts'    => __( 'Search content by title…', 'fabled-ai-tools' ),
+                    'noPostsFound'   => __( 'No content found for this status.', 'fabled-ai-tools' ),
+                    'loadPostsError' => __( 'Unable to load content for this source.', 'fabled-ai-tools' ),
+                    'postSelectionRequired' => __( 'Please select a content item for the chosen source.', 'fabled-ai-tools' ),
+                    'bodyFilledFromPost' => __( 'Article body will be pulled from the selected content item.', 'fabled-ai-tools' ),
                     'mediaSource'   => __( 'Media Source', 'fabled-ai-tools' ),
                     'selectMedia'   => __( 'Select Media Attachment', 'fabled-ai-tools' ),
                     'loadingMedia'  => __( 'Loading media…', 'fabled-ai-tools' ),
@@ -182,7 +182,7 @@ class FAT_Admin {
                     'uploadSize'    => __( 'Size', 'fabled-ai-tools' ),
                     'applySelected' => __( 'Apply Selected Fields', 'fabled-ai-tools' ),
                     'applyPanelTitle' => __( 'Apply to WordPress', 'fabled-ai-tools' ),
-                    'applyTarget'   => __( 'Target', 'fabled-ai-tools' ),
+                    'applyTarget'   => __( 'Target Content', 'fabled-ai-tools' ),
                     'applyTargetSelected' => __( 'Selected target', 'fabled-ai-tools' ),
                     'applyTargetNone' => __( 'No target selected.', 'fabled-ai-tools' ),
                     'applyFields'   => __( 'Fields to apply', 'fabled-ai-tools' ),
@@ -1157,7 +1157,7 @@ class FAT_Admin {
         $page     = isset( $_GET['page'] ) ? max( 1, absint( $_GET['page'] ) ) : 1;
         $per_page = isset( $_GET['per_page'] ) ? min( 50, max( 1, absint( $_GET['per_page'] ) ) ) : 20;
 
-        $post_types = array( 'post' );
+        $post_types = $this->entity_query_service->get_generic_content_supported_post_types();
         $featured_support = isset( $_GET['featured_support'] ) ? FAT_Helpers::to_bool_flag( wp_unslash( $_GET['featured_support'] ) ) : 0;
         if ( ! empty( $featured_support ) ) {
             $post_types = $this->entity_query_service->get_featured_image_supported_post_types();
