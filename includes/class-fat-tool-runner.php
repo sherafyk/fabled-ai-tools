@@ -349,8 +349,8 @@ class FAT_Tool_Runner {
             return new WP_Error( 'fat_target_not_found', __( 'Target content could not be found.', 'fabled-ai-tools' ), array( 'status' => 404 ) );
         }
 
-        if ( 'post' === $target_type && 'post' !== $target_post->post_type ) {
-            return new WP_Error( 'fat_target_type_mismatch', __( 'Target is not a post.', 'fabled-ai-tools' ), array( 'status' => 400 ) );
+        if ( 'post' === $target_type && ! $this->is_supported_content_target_post( $target_post ) ) {
+            return new WP_Error( 'fat_target_type_mismatch', __( 'Target is not supported content.', 'fabled-ai-tools' ), array( 'status' => 400 ) );
         }
 
         if ( 'attachment' === $target_type && 'attachment' !== $target_post->post_type ) {
@@ -487,17 +487,17 @@ class FAT_Tool_Runner {
         }
 
         $post = get_post( $post_id );
-        if ( ! $post || 'post' !== $post->post_type ) {
-            return new WP_Error( 'fat_invalid_inputs', __( 'Selected post could not be found.', 'fabled-ai-tools' ), array( 'status' => 400 ) );
+        if ( ! $post || ! $this->is_supported_content_target_post( $post ) ) {
+            return new WP_Error( 'fat_invalid_inputs', __( 'Selected content item could not be found.', 'fabled-ai-tools' ), array( 'status' => 400 ) );
         }
 
         if ( ! $user || ! $user->exists() || ! user_can( $user, 'edit_post', $post_id ) ) {
-            return new WP_Error( 'fat_invalid_inputs', __( 'You are not allowed to use the selected post.', 'fabled-ai-tools' ), array( 'status' => 403 ) );
+            return new WP_Error( 'fat_invalid_inputs', __( 'You are not allowed to use the selected content item.', 'fabled-ai-tools' ), array( 'status' => 403 ) );
         }
 
         $status = get_post_status( $post );
         if ( ! in_array( $status, array( 'draft', 'publish' ), true ) || $status !== $source ) {
-            return new WP_Error( 'fat_invalid_inputs', __( 'Selected post is not valid for the chosen content source.', 'fabled-ai-tools' ), array( 'status' => 400 ) );
+            return new WP_Error( 'fat_invalid_inputs', __( 'Selected content item is not valid for the chosen source.', 'fabled-ai-tools' ), array( 'status' => 400 ) );
         }
 
         $inputs['article_body'] = $this->normalize_post_content_for_article_body( $post->post_content );
@@ -598,7 +598,10 @@ class FAT_Tool_Runner {
 
         $target_id = 0;
         if ( 'post' === $target_type ) {
-            $target_id = absint( FAT_Helpers::array_get( $raw_inputs, '__fat_article_post_id', 0 ) );
+            $target_id = absint( FAT_Helpers::array_get( $raw_inputs, '__fat_target_post_id', 0 ) );
+            if ( $target_id <= 0 ) {
+                $target_id = absint( FAT_Helpers::array_get( $raw_inputs, '__fat_article_post_id', 0 ) );
+            }
         } elseif ( 'attachment' === $target_type ) {
             $target_id = absint( FAT_Helpers::array_get( $raw_inputs, '__fat_attachment_id', 0 ) );
         }
@@ -608,10 +611,55 @@ class FAT_Tool_Runner {
         return array(
             'enabled'      => ! empty( $allowed_mappings ),
             'target_type'  => $target_type,
+            'target_family'=> 'attachment' === $target_type ? 'attachment' : 'content',
             'target_id'    => $target_id,
             'mappings'     => $allowed_mappings,
             'output_keys'  => array_values( array_map( 'sanitize_key', (array) $output_keys ) ),
         );
+    }
+
+    protected function is_supported_content_target_post( $post ) {
+        if ( ! $post instanceof WP_Post ) {
+            return false;
+        }
+
+        if ( 'attachment' === $post->post_type ) {
+            return false;
+        }
+
+        $supported_types = $this->get_supported_content_target_post_types();
+        if ( ! in_array( sanitize_key( $post->post_type ), $supported_types, true ) ) {
+            return false;
+        }
+
+        return true;
+    }
+
+    protected function get_supported_content_target_post_types() {
+        $objects = get_post_types(
+            array(
+                'public'  => true,
+                'show_ui' => true,
+            ),
+            'objects'
+        );
+        $types = array();
+
+        foreach ( (array) $objects as $post_type => $object ) {
+            if ( 'attachment' === $post_type ) {
+                continue;
+            }
+            if ( ! post_type_supports( $post_type, 'editor' ) ) {
+                continue;
+            }
+            $types[] = sanitize_key( $post_type );
+        }
+
+        if ( empty( $types ) ) {
+            $types[] = 'post';
+        }
+
+        return array_values( array_unique( $types ) );
     }
 
     protected function get_allowed_apply_mappings( $tool, $target_type ) {

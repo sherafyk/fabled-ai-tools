@@ -57,6 +57,27 @@ class FAT_Entity_Query_Service {
         return array_values( array_unique( $types ) );
     }
 
+    public function get_generic_content_supported_post_types() {
+        $objects = get_post_types( array( 'public' => true, 'show_ui' => true ), 'objects' );
+        $types   = array();
+
+        foreach ( (array) $objects as $post_type => $object ) {
+            if ( 'attachment' === $post_type ) {
+                continue;
+            }
+            if ( ! post_type_supports( $post_type, 'editor' ) ) {
+                continue;
+            }
+            $types[] = sanitize_key( $post_type );
+        }
+
+        if ( empty( $types ) ) {
+            $types[] = 'post';
+        }
+
+        return array_values( array_unique( $types ) );
+    }
+
     public function search_editable_posts_for_runner( $user, $args = array() ) {
         $user  = $this->normalize_user( $user );
         $status = sanitize_key( FAT_Helpers::array_get( $args, 'status', '' ) );

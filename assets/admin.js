@@ -298,7 +298,7 @@
 
         async function fetchEntityList(kind, args) {
             const params = Object.assign({ q: '', page: 1, per_page: 20 }, args || {});
-            const key = [kind, params.status || '', params.q || '', params.page, params.per_page].join('|');
+            const key = [kind, params.status || '', params.q || '', params.page, params.per_page, params.featured_support ? '1' : '0'].join('|');
             if (entityCache[key]) {
                 return entityCache[key];
             }
@@ -311,6 +311,9 @@
             endpoint.searchParams.set('per_page', String(params.per_page || 20));
             if (kind === 'posts') {
                 endpoint.searchParams.set('status', params.status || 'publish');
+                if (params.featured_support) {
+                    endpoint.searchParams.set('featured_support', '1');
+                }
             }
 
             const response = await fetch(endpoint.toString(), {
@@ -548,7 +551,8 @@
                 emptyMessage: data.strings.noPostsFound || 'No posts found for this status.',
                 errorMessage: data.strings.loadPostsError || 'Unable to load posts for this source.',
                 formatLabel: function (post) {
-                    return post.title || ('#' + post.id);
+                    const label = post.title || ('#' + post.id);
+                    return post.post_type_label ? (label + ' — ' + post.post_type_label) : label;
                 },
                 fetcher: function (params) {
                     return fetchEntityList('posts', {
@@ -1030,7 +1034,8 @@
                 emptyMessage: data.strings.noPostsFound || 'No posts found for this status.',
                 errorMessage: data.strings.loadPostsError || 'Unable to load posts for this source.',
                 formatLabel: function (post) {
-                    return post.title || ('#' + post.id);
+                    const label = post.title || ('#' + post.id);
+                    return post.post_type_label ? (label + ' — ' + post.post_type_label) : label;
                 },
                 fetcher: async function (params) {
                     const draftResult = await fetchEntityList('posts', { status: 'draft', q: params.q, page: params.page, per_page: Math.ceil(params.per_page / 2), featured_support: 1 });
@@ -1171,7 +1176,8 @@
                 emptyMessage: data.strings.noPostsFound || 'No posts found for this status.',
                 errorMessage: data.strings.loadPostsError || 'Unable to load posts for this source.',
                 formatLabel: function (post) {
-                    return post.title || ('#' + post.id);
+                    const label = post.title || ('#' + post.id);
+                    return post.post_type_label ? (label + ' — ' + post.post_type_label) : label;
                 },
                 fetcher: async function (params) {
                     const draftResult = await fetchEntityList('posts', { status: 'draft', q: params.q, page: params.page, per_page: Math.ceil(params.per_page / 2), featured_support: 1 });
@@ -1348,6 +1354,10 @@
                     setStatus(data.strings.postSelectionRequired || 'Please select a post for the chosen content source.', 'error');
                     return;
                 }
+            }
+
+            if (launchContext.targetPostId) {
+                inputs.__fat_target_post_id = String(launchContext.targetPostId);
             }
 
             if (contentSourceState.attachmentControls) {
