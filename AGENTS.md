@@ -937,3 +937,300 @@ When asked to implement a specific chunk:
 - preserve backward compatibility unless there is a strong, explicit reason not to
 - update README when admin-visible behavior materially changes
 
+
+---
+
+## 9. Post-implementation audit addendum (current repository state)
+
+This addendum reflects a review of the **current attached repository version**, not the earlier baseline.
+
+### What appears substantially completed
+
+The following original directions are now materially present in the codebase:
+
+- **Chunk 1:** object-level permission hardening is substantially in place
+  - `FAT_Entity_Query_Service` now filters posts/attachments with `edit_post`
+  - selected post and selected attachment source resolution now enforce object-level capability checks
+- **Chunk 2:** settings and operational controls are materially improved
+  - masked API key preserve/clear flow exists
+  - execution pause switch exists
+  - log retention exists
+  - manual log purge exists
+  - connection test exists
+  - apply actions are now logged
+- **Chunk 3:** reusable async selectors/search are materially present
+  - search + pagination/incremental lookup now exist in the runner
+- **Chunk 4:** built-in recognition and portability are materially present
+  - built-in registry/reset exists
+  - import/export exists
+  - `load_plugin_textdomain()` was added
+- **Chunk 5:** media polish is materially improved
+  - `FAT_Media_Service` exists
+  - featured-image workflows now support broader featured-image-capable post types on lookup/apply
+  - Attachment Metadata Assistant exists
+- **Chunk 6:** premium productivity surfaces are materially present
+  - Needs Attention screen exists
+  - launch links from posts/media exist
+  - recent failure/health summaries exist
+
+### What is still incomplete or not fully aligned with the intended direction
+
+The current version is much stronger, but several important gaps remain. These are not cosmetic; they are the next repository-specific tasks required to finish the commercial-readiness work cleanly.
+
+1. **Generic apply is still effectively core-`post` only**
+   - The runner and entity search layers now understand broader content selection in some places.
+   - But `FAT_Tool_Runner::apply_generated_outputs()` still rejects non-`post` post types when target type is `post`.
+   - `build_apply_runtime_meta()` also still assumes `__fat_article_post_id` as a core-post target concept rather than a generic editable content target.
+   - Result: the plugin now has a mixed mental model where featured-image workflows support featured-image-capable content types, but generic text apply is still limited to the built-in `post` post type.
+
+2. **Critical built-in workflow configuration is still hidden rather than intentionally managed**
+   - Built-ins are now identifiable and resettable, which is good.
+   - But workflow config is still preserved via hidden inputs in the editor rather than shown as explicit read-only or validated configuration.
+   - That means one of the original major product/UX goals is only partly complete.
+
+3. **The main hotspot files grew rather than being stabilized**
+   - `FAT_Admin`, `assets/admin.js`, and `FAT_Tool_Runner` remain very large.
+   - The new features landed successfully, but the maintenance risk is now higher because they were added mostly into existing large files.
+   - This is now the biggest medium-term engineering risk in the repository.
+
+4. **Runner/apply semantics are still more “workflow by special case” than “workflow by explicit contract”**
+   - The current code works, but workflow identity, target resolution, and apply target semantics are still spread across runner PHP, localized JS, editor hidden fields, and workflow-specific UI branches.
+   - This is acceptable for now, but it will get brittle again if more built-ins are added without a tighter contract.
+
+The additional chunks below are the current source-of-truth follow-up tasks required after the already-completed work.
+
+---
+
+## Chunk 7 — Finish generic content-target support and unify apply semantics
+
+### Goal
+Complete the unfinished shift from core-`post` assumptions to a coherent “editable content item” model for generic text tools, while preserving attachment-specific behavior and backward compatibility.
+
+### Why this chunk is needed now
+The repository now partially supports broader content types:
+- lookup/search layers can expose broader supported post types in some flows
+- featured-image workflows already allow thumbnail-capable non-`post` content
+
+But generic apply still hard-rejects anything whose `post_type !== 'post'`. That mismatch will confuse users and future implementers.
+
+### Likely files to inspect or modify
+- `includes/class-fat-tool-runner.php`
+- `includes/class-fat-admin.php`
+- `includes/class-fat-entity-query-service.php`
+- `includes/class-fat-tool-validator.php`
+- `assets/admin.js`
+- `assets/admin.css` (only if wording/help text/UI labels need minor support)
+
+### What should change
+
+1. **Define a stable distinction between target families**
+   - Keep `attachment` as its own target family.
+   - Replace the current generic `post` mental model with an explicit “content item” model that means any editable non-attachment post object.
+   - Preserve backward compatibility with stored `apply.target = post` values; do **not** force a DB migration unless absolutely necessary.
+
+2. **Stop rejecting non-`post` post types for generic text apply**
+   - `FAT_Tool_Runner::apply_generated_outputs()` should validate that:
+     - target exists
+     - target is not an attachment when using content-item apply
+     - current user can edit it
+   - It should **not** require `post_type === 'post'` for the generic text path.
+
+3. **Make apply runtime metadata reflect the real target concept**
+   - `build_apply_runtime_meta()` should stop encoding generic text targets as if they are only article posts.
+   - Localized runner/apply metadata should describe content targets in a way that remains compatible with existing JS but no longer bakes in core-post-only assumptions.
+
+4. **Expand generic selector support carefully**
+   - For generic text apply/source selection, allow supported non-attachment public post types.
+   - Keep conservative defaults if needed, but do not silently contradict the actual server-side capability.
+
+5. **Keep mapping rules narrow**
+   - Do not add arbitrary meta-field writing in this chunk.
+   - Generic text apply should remain limited to safe core fields:
+     - title
+     - excerpt
+     - content
+   - Attachment apply remains title/caption/description/alt text.
+
+### Constraints
+- Preserve backward compatibility with existing stored tools and REST payloads.
+- Do not rename seeded tool slugs.
+- Avoid any migration that rewrites existing tool rows unless strictly necessary.
+
+### Definition of done
+- Generic text tools can apply to supported non-attachment post types, not just `post`.
+- Runner UI labels and selection UX no longer imply a false core-post-only limitation.
+- Existing tools configured with `apply.target = post` still work without manual repair.
+
+### Testing expectations
+- generic text tool applies title/excerpt/content to:
+  - a standard post
+  - a page
+  - a public CPT with editor support
+- attachment apply still only works on attachments
+- unauthorized users still cannot apply to objects they cannot edit
+- existing built-in text tools still run/apply without config changes
+
+### Regression concerns
+- Do not accidentally allow applying text outputs to attachments via the wrong path.
+- Do not break launch links that pass `fat_source_post` / `fat_target_post`.
+- Do not silently widen target scope to unsupported/private/internal object types.
+
+---
+
+## Chunk 8 — Make built-in workflow configuration explicit, not hidden
+
+### Goal
+Finish the product/editor hardening work by removing hidden critical workflow behavior from the effective editing model.
+
+### Why this chunk is needed now
+Built-ins are now resettable and identifiable, but the editor still preserves workflow configuration via hidden fields. That means the UI still hides critical behavior rather than explaining it or intentionally managing it.
+
+### Likely files to inspect or modify
+- `includes/class-fat-admin.php`
+- `includes/class-fat-tool-validator.php`
+- `includes/class-fat-builtin-tools.php`
+- `includes/class-fat-activator.php`
+- `assets/admin.css`
+- optionally `assets/admin.js` if minor editor behavior needs help text or conditional panels
+
+### What should change
+
+1. **Expose built-in workflow configuration intentionally**
+   - For each built-in workflow, add a dedicated panel in the tool editor showing the workflow configuration currently being used.
+   - Use one of two patterns per setting:
+     - **read-only with explanation**, or
+     - **editable with explicit validation**
+   - Do not keep critical behavior only in hidden fields.
+
+2. **Be repository-specific about what is editable**
+   - Safe candidates for explicit editable workflow config may include:
+     - generated featured image size/format
+     - uploaded image output size/format
+   - If a setting is not truly supported end-to-end, show it as read-only or remove it from the editor entirely.
+
+3. **Protect built-in workflow identity more clearly**
+   - Make it obvious which fields define the built-in product behavior and which fields are safe to customize.
+   - Built-in workflow identity should remain stable after save/update/reset.
+
+4. **Tighten validator expectations**
+   - `FAT_Tool_Validator` should validate only the workflow config that is actually allowed for the relevant built-in.
+   - Unknown keys should be rejected or ignored intentionally rather than drifting through hidden form state.
+
+5. **Document reset behavior in-editor**
+   - The built-in reset action should clearly state what it resets:
+     - prompts
+     - schema
+     - integration config
+     - workflow config
+   - Avoid ambiguity for site operators.
+
+### Constraints
+- Do not break existing stored built-ins.
+- Do not force full tool recreation.
+- Do not expose configuration knobs that are not genuinely supported by runtime code.
+
+### Definition of done
+- No critical built-in workflow behavior is preserved only through hidden editor inputs.
+- Editors/admins can clearly tell what a built-in is doing and what is or is not configurable.
+- Built-in save/reset flows remain stable and predictable.
+
+### Testing expectations
+- edit each built-in and confirm workflow identity survives save
+- reset each built-in and confirm intended config is restored
+- invalid workflow config is rejected cleanly
+- import/export of built-ins remains predictable
+
+### Regression concerns
+- Do not accidentally strip workflow config from existing rows during update.
+- Do not allow built-ins to drift into unsupported or partially supported runtime states.
+
+---
+
+## Chunk 9 — Refactor hotspot files into focused repository-native modules
+
+### Goal
+Reduce maintenance risk now that the repository has grown significantly, without rewriting the plugin architecture or changing user-facing behavior.
+
+### Why this chunk is needed now
+The new functionality landed, but it concentrated even more logic into already-large files:
+- `includes/class-fat-admin.php`
+- `assets/admin.js`
+- `includes/class-fat-tool-runner.php`
+
+This is now the clearest medium-term blocker to safe iteration.
+
+### Likely files to inspect or modify
+- `includes/class-fat-admin.php`
+- `includes/class-fat-tool-runner.php`
+- `assets/admin.js`
+- optional new PHP helpers/services such as:
+  - `includes/class-fat-admin-pages.php`
+  - `includes/class-fat-admin-launch-links.php`
+  - `includes/class-fat-runner-apply-service.php`
+  - `includes/class-fat-runner-context-service.php`
+- optional new small JS modules/files if they can still be loaded in the current no-build setup
+
+### What should change
+
+1. **Split `FAT_Admin` by responsibility**
+   - Extract at least the following responsibility groups into focused helpers/classes:
+     - tool list/editor actions
+     - settings/log actions
+     - needs-attention / launch-link surfaces
+     - runner lookup endpoints / localization helpers
+   - Keep `FAT_Admin` as a thin composition/registration layer.
+
+2. **Split `FAT_Tool_Runner` by responsibility**
+   - Extract focused helpers/services for:
+     - contextual input resolution
+     - generic apply handling
+     - run/apply logging helpers
+     - workflow dispatch helpers
+   - Keep the existing public entrypoints stable.
+
+3. **Split `assets/admin.js` into repository-native sections**
+   - Separate logic for:
+     - runner boot/init
+     - reusable entity selector utilities
+     - generic apply UI
+     - featured-image workflow UI
+     - uploaded-image workflow UI
+     - attachment metadata assistant UI
+   - This can still be done with plain separate JS files or clearly segmented IIFE-style modules loaded in-order; do **not** add a build step.
+
+4. **Preserve current behavior while reducing duplication**
+   - This chunk is not about new features.
+   - It is about reducing change risk and making future work less fragile.
+
+5. **Add lightweight inline developer comments where contracts are subtle**
+   - Especially around:
+     - workflow identity
+     - apply payload shape
+     - launch context query args
+     - backward-compatibility shims
+
+### Constraints
+- No framework rewrite.
+- No Composer or build pipeline introduction.
+- No user-facing behavioral changes beyond minor incidental cleanup.
+- Public hooks/routes/slugs should remain stable.
+
+### Definition of done
+- `FAT_Admin`, `FAT_Tool_Runner`, and `assets/admin.js` are materially smaller and easier to reason about.
+- Core contracts are preserved.
+- New repository-specific helpers have clear boundaries and names.
+
+### Testing expectations
+- full smoke test of all admin pages
+- run/apply test for:
+  - generic text tool
+  - featured image generator
+  - uploaded image processor
+  - attachment metadata assistant
+- import/export still works
+- Needs Attention links still open the runner correctly
+
+### Regression concerns
+- Do not introduce load-order issues in admin JS.
+- Do not break localized data keys expected by existing runner code.
+- Do not split classes in a way that makes bootstrapping harder to follow than it is today.
