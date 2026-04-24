@@ -28,7 +28,7 @@ class FAT_Tool_Runner {
         $this->uploaded_image_processor = $uploaded_image_processor;
         $this->attachment_metadata_assistant = $attachment_metadata_assistant;
         $this->context_service = $context_service ? $context_service : new FAT_Runner_Context_Service();
-        $this->apply_service   = $apply_service ? $apply_service : new FAT_Runner_Apply_Service( $this->context_service, array( $this, 'log_run' ) );
+        $this->apply_service   = $apply_service ? $apply_service : new FAT_Runner_Apply_Service( $this->context_service, array( $this, 'record_run_log' ) );
     }
 
     public function get_accessible_tools_for_user( $user ) {
@@ -334,6 +334,10 @@ class FAT_Tool_Runner {
         );
 
         $this->runs_repo->insert( $record );
+    }
+
+    public function record_run_log( $tool, $user, $data ) {
+        $this->log_run( $tool, $user, $data );
     }
 
     protected function normalize_user( $user ) {
